@@ -1,6 +1,3 @@
-"""Parser for Fly-in map files."""
-
-
 class Zone:
     def __init__(self, name: str, x: int, y: int, metadata: dict[str, str]) -> None:
         self.name = name
