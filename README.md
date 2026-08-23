@@ -7,3 +7,8 @@ Puis creer le fichier parser.py
 2. ALGORITHME ensuite  → calculer les déplacements des drones
 3. SORTIE TEXTE         → afficher le résultat au format demandé
 4. ÉCRAN VISUEL en dernier → pygame vient rejouer ce qui a déjà été calculé
+
+## Algo.py
+* Parser complet
+* Graphe + coûts de zones
+* Dijkstra + reconstruction de chemin pour un seul drone
