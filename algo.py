@@ -131,18 +131,106 @@ def reconstruct_path(previous: dict, start: str, end: str) -> list[str]:
 
     return chemin
 
+# ETAPE 5 : LISTER DANS UN DICT LES CHEMIN DEJA PRIS
+def chemin_avec_tours(chemin: list[str], zones: dict) -> dict[str, int]:
+    """Transforme une liste de zones en dict {zone: tour_d_arrivee}"""
+    path_use = {}
+    nbr_tour = 0
+
+    for name_zone in chemin:
+        if name_zone == chemin[0]:
+            path_use[name_zone] = 0
+
+        else:
+            cout = zone_cost(zones[name_zone])
+            nbr_tour = nbr_tour + cout
+            path_use[name_zone] = nbr_tour
+
+    return path_use
+
+
+def add_to_occupation(occupation: dict, drone_id: str, chemin_tours: dict) -> None:
+    """Ajoute le passage d'un drone dans le registre d'occupation global."""
+    for zone_name, tour in chemin_tours.items():
+        
+        # étape 1 : s'assurer que la zone existe dans occupation
+        if zone_name not in occupation:
+            occupation[zone_name] = {}
+        
+        # étape 2 : s'assurer que ce tour existe pour cette zone
+        if tour not in occupation[zone_name]:
+            occupation[zone_name][tour] = []
+        
+        # étape 3 : ajouter le drone à la liste de ce tour
+        occupation[zone_name][tour].append(drone_id)
+
+
+def zone_disponible(occupation: dict, zone_name: str, tour: int, zones: dict) -> bool:
+    """Vérifie si une zone a encore de la place pour un drone de plus à ce tour."""
+    
+    # si personne n'est jamais allé dans cette zone, ou personne à ce tour précis,
+    # alors il y a 0 drone présent
+    if zone_name not in occupation:
+        nbr_zone = 0
+    elif tour not in occupation[zone_name]:
+        nbr_zone = 0
+    else:
+        nbr_zone = len(occupation[zone_name][tour])
+    
+    max_capacite = zones[zone_name].max_drones
+    
+    if max_capacite > nbr_zone:
+        return True
+    else:
+        return False
+
+def planifier_chemin_avec_attente(chemin: list[str], zones: dict, occupation: dict) -> dict[str, int]:
+    """
+    Calcule à quel tour le drone arrive à chaque zone de son chemin,
+    en insérant de l'attente si une zone est déjà occupée.
+    """
+    chemin_tours = {}
+    tour_actuel = 0
+    
+    # la première zone, c'est le départ -> tour 0, toujours possible
+    chemin_tours[chemin[0]] = 0
+    
+    for i in range(1, len(chemin)):
+        zone_name = chemin[i]
+        zone_precedente = chemin[i - 1]
+        
+        # le coût normal pour atteindre cette zone
+        cout = zone_cost(zones[zone_name])
+        tour_arrivee = tour_actuel + cout
+        
+        # tant que la zone n'est pas disponible à ce tour, on attend un tour de plus
+        while not zone_disponible(occupation, zone_name, tour_arrivee, zones):
+            tour_arrivee += 1
+        
+        chemin_tours[zone_name] = tour_arrivee
+        tour_actuel = tour_arrivee
+    
+    return chemin_tours
 
 if __name__ == "__main__":
-    # 1. on parse le fichier de carte -> zones, connexions, start/end
-    resultat = parse_map("maps/hard/01_maze_nightmare.txt")
-
-    # 2. on construit le graphe des voisins (sans les zones bloquées)
+    resultat = parse_map("maps/easy/01_linear_path.txt")
     adjacency = build_adjacency(resultat["zones"], resultat["connections"])
-
-    # 3. on calcule le coût minimum vers chaque zone + la trace du chemin
     distances, previous = dijkstra(adjacency, resultat["zones"], resultat["start_zone"])
-
-    # 4. on reconstruit le chemin complet, dans l'ordre, de start à goal
     chemin = reconstruct_path(previous, resultat["start_zone"], resultat["end_zone"])
 
-    print(chemin)
+    path_use = chemin_avec_tours(chemin, resultat["zones"])
+    print(path_use)
+    print()
+
+    occupation = {}
+    chemin_tours_d1 = {'start': 0, 'waypoint1': 1, 'waypoint2': 2, 'goal': 3}
+
+    add_to_occupation(occupation, "D1", chemin_tours_d1)
+    print(occupation)
+
+    print()
+    occupation = {'waypoint1': {1: ['D1']}}
+
+    print(zone_disponible(occupation, "waypoint1", 1, resultat["zones"]))   # attendu: False
+    print(zone_disponible(occupation, "waypoint1", 2, resultat["zones"]))   # attendu: True
+    print(zone_disponible(occupation, "waypoint2", 1, resultat["zones"]))   # attendu: True
