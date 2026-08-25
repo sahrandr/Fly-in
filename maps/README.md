@@ -88,3 +88,17 @@ Maps use color coding for enhanced understanding:
 - 🔵 **Cyan**: Priority zones
 
 Use the `--visual` flag to see colored terminal output during simulation!
+
+Fichier .txt
+    ↓ parse_map
+Zones, Connections, nb_drones, start_zone, end_zone
+    ↓ build_adjacency
+Graphe (qui est voisin de qui, sans zones bloquées)
+    ↓ dijkstra + reconstruct_path
+Chemin le plus court pour un drone
+    ↓ planifier_tous_les_drones (avec attente si conflit de capacité de zones)
+Chemin de chaque drone, avec son tour d'arrivée à chaque zone
+    ↓ organiser_par_tour
+Regroupement par tour, plutôt que par drone
+    ↓ afficher_simulation
+Sortie texte au format attendu par le sujet

@@ -212,25 +212,81 @@ def planifier_chemin_avec_attente(chemin: list[str], zones: dict, occupation: di
     
     return chemin_tours
 
+def planifier_tous_les_drones(chemin: list[str], zones: dict, nb_drones: int) -> dict[str, dict]:
+    """Calcule le chemin de TOUS les drones, un par un, en tenant compte des autres."""
+    occupation = {}
+    tous_les_chemins = {}
+
+    for numero in range(1, nb_drones + 1):
+        drone_id = f"D{numero}"
+        
+        chemin_tours = planifier_chemin_avec_attente(chemin, zones, occupation)
+        add_to_occupation(occupation, drone_id, chemin_tours)
+        
+        tous_les_chemins[drone_id] = chemin_tours
+
+    return tous_les_chemins
+
+
+def organiser_par_tour(tous_les_chemins: dict) -> dict[int, list[tuple[str, str]]]:
+    """
+    Transforme {drone: {zone: tour}} en {tour: [(drone, zone), ...]}
+    en ignorant le tour 0 (position de départ, pas un mouvement).
+    """
+    par_tour = {}
+    
+    for drone_id, chemin_tours in tous_les_chemins.items():
+        for zone_name, tour in chemin_tours.items():
+            if tour == 0:
+                continue
+
+            # s'assurer que ce tour existe dans par_tour
+            if tour not in par_tour:
+                par_tour[tour] = []
+            
+            # ajouter le couple (drone, zone) comme UN SEUL élément (un tuple)
+            par_tour[tour].append((drone_id, zone_name))
+    
+    return par_tour
+
+def afficher_simulation(par_tour: dict) -> None:
+    """Affiche la simulation tour par tour, au format demandé par le sujet."""
+    
+    # il faut parcourir les tours DANS L'ORDRE (1, 2, 3, 4...)
+    nombre_de_tours = max(par_tour.keys())
+    
+    for tour in range(1, nombre_de_tours + 1):
+        if tour not in par_tour:
+            continue  # personne ne bouge à ce tour (rare, mais possible)
+        
+        mouvements = par_tour[tour]
+        
+        # transformer chaque (drone_id, zone_name) en la chaîne "D1-bottleneck"
+        morceaux_texte = []
+        for drone_id, zone_name in mouvements:
+            morceaux_texte.append(f"{drone_id}-{zone_name}")
+        
+        # assembler tous les morceaux d'un même tour, séparés par un espace
+        ligne = " ".join(morceaux_texte)
+        print(ligne)
+
+
 if __name__ == "__main__":
-    resultat = parse_map("maps/easy/01_linear_path.txt")
+    resultat = parse_map("maps/easy/03_basic_capacity.txt")
     adjacency = build_adjacency(resultat["zones"], resultat["connections"])
     distances, previous = dijkstra(adjacency, resultat["zones"], resultat["start_zone"])
     chemin = reconstruct_path(previous, resultat["start_zone"], resultat["end_zone"])
 
-    path_use = chemin_avec_tours(chemin, resultat["zones"])
-    print(path_use)
-    print()
+    tous_les_chemins = planifier_tous_les_drones(chemin, resultat["zones"], resultat["nb_drones"])
 
-    occupation = {}
-    chemin_tours_d1 = {'start': 0, 'waypoint1': 1, 'waypoint2': 2, 'goal': 3}
-
-    add_to_occupation(occupation, "D1", chemin_tours_d1)
-    print(occupation)
+    for drone_id, chemin_tours in tous_les_chemins.items():
+        print(drone_id, ":", chemin_tours)
 
     print()
-    occupation = {'waypoint1': {1: ['D1']}}
+    tous_les_chemins = planifier_tous_les_drones(chemin, resultat["zones"], resultat["nb_drones"])
+    par_tour = organiser_par_tour(tous_les_chemins)
+    print(par_tour)
 
-    print(zone_disponible(occupation, "waypoint1", 1, resultat["zones"]))   # attendu: False
-    print(zone_disponible(occupation, "waypoint1", 2, resultat["zones"]))   # attendu: True
-    print(zone_disponible(occupation, "waypoint2", 1, resultat["zones"]))   # attendu: True
+    print()
+    par_tour = organiser_par_tour(tous_les_chemins)
+    afficher_simulation(par_tour)
