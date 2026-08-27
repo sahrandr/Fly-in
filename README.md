@@ -79,3 +79,93 @@ Dijkstra donne le **coût**, pas le **chemin**. Cette fonction remonte le dict `
 
 ### Principe
 On part de `end`, on suit `previous` à l'envers jusqu'à tomber sur `None` (= le départ), puis on inverse la liste obtenue (`.reverse()`) pour la remettre dans l'ordre de lecture normal.
+
+## 6. Chemin avec tours (`chemin_avec_tours` / `planifier_chemin_avec_attente`)
+
+### Le problème de départ
+Appeler `dijkstra` plusieurs fois avec les mêmes paramètres donne toujours **le même chemin** — l'algorithme ne sait rien des autres drones. Il fallait donc ajouter une notion de **temps** (le tour) à chaque étape du chemin, pas juste la distance totale.
+
+### `chemin_avec_tours` (version simple, sans conflit)
+Transforme une liste de zones (`['start', 'waypoint1', 'waypoint2', 'goal']`) en un dict `{zone: tour_d_arrivee}`, en utilisant `zone_cost` pour savoir de combien le tour avance à chaque étape (1 pour normal/priority, 2 pour restricted).
+
+### `planifier_chemin_avec_attente` (version avec gestion des conflits)
+Reprend le même principe, mais avant d'accepter le tour d'arrivée calculé pour une zone, vérifie avec `zone_disponible` si elle est déjà pleine à ce tour. Si oui, **incrémente le tour** (le drone attend un tour de plus) jusqu'à trouver un tour où la zone est libre.
+
+## 7. Le registre d'occupation (`add_to_occupation` / `zone_disponible`)
+
+### Objectif
+Garder la trace de "qui est où, à quel tour", pour permettre à chaque nouveau drone de vérifier s'il peut avancer ou doit attendre.
+
+### Structure retenue
+Un dict à deux niveaux : `{zone_name: {tour: [liste_de_drone_ids]}}`.
+
+```python
+{'waypoint1': {1: ['D1']}, 'waypoint2': {2: ['D1']}}
+```
+
+### `add_to_occupation(occupation, drone_id, chemin_tours)`
+Parcourt le chemin d'un drone et enregistre sa présence dans le registre global, en créant les niveaux manquants (`zone`, puis `tour`) au fur et à mesure.
+
+### `zone_disponible(occupation, zone_name, tour, zones)`
+Compare le nombre de drones déjà présents dans une zone à un tour donné avec `zone.max_drones`. Gère le cas où la zone/le tour n'existe pas encore dans `occupation` (= personne présent, donc disponible).
+
+### Piège rencontré et corrigé
+Accéder directement à `occupation[zone_name][tour]` sans vérifier son existence provoque un `KeyError` dès qu'une zone/tour n'a encore jamais été visité — il faut vérifier l'existence à chaque niveau avant d'y accéder.
+
+## 8. Généraliser à N drones (`planifier_tous_les_drones`)
+
+### Objectif
+Ne plus coder "D1", "D2" en dur, mais boucler automatiquement sur `nb_drones`.
+
+### Principe
+```python
+for numero in range(1, nb_drones + 1):
+    drone_id = f"D{numero}"
+    chemin_tours = planifier_chemin_avec_attente(chemin, zones, occupation)
+    add_to_occupation(occupation, drone_id, chemin_tours)
+```
+
+Chaque drone est planifié **dans l'ordre**, en tenant compte de toutes les réservations déjà faites par les drones précédents — c'est cette dépendance à l'`occupation` partagée qui force naturellement l'attente quand une zone est déjà prise.
+
+### Résultat validé
+Testé sur `03_basic_capacity.txt` (4 drones, `bottleneck` avec `max_drones=2`) : D1/D2 passent ensemble au tour 1, D3/D4 doivent attendre et passent au tour 2 — comportement conforme aux règles de capacité du sujet.
+
+## 9. Le format de sortie (`organiser_par_tour` / `afficher_simulation`)
+
+### Le problème
+`planifier_tous_les_drones` donne les données organisées **par drone** (`{drone: {zone: tour}}`), mais le format de sortie attendu par le sujet est organisé **par tour** (une ligne par tour, listant tous les drones qui bougent).
+
+### `organiser_par_tour`
+Réorganise `{drone: {zone: tour}}` en `{tour: [(drone, zone), ...]}`, en ignorant le tour 0 (le départ n'est pas un mouvement).
+
+### `afficher_simulation`
+Parcourt les tours dans l'ordre (`1` à `max`), et pour chaque tour, assemble tous les mouvements en une ligne texte du type `D1-bottleneck D2-bottleneck`, avec `" ".join(...)` pour coller les morceaux séparés par un espace.
+
+### Résultat obtenu (exemple sur `03_basic_capacity.txt`)
+```
+D1-bottleneck D2-bottleneck
+D1-wide_area D2-wide_area D3-bottleneck D4-bottleneck
+D1-goal D2-goal D3-wide_area D4-wide_area
+D3-goal D4-goal
+```
+
+## Pipeline complet obtenu à ce stade
+
+```
+fichier .txt
+  → parse_map                        (Zone, Connection, nb_drones, start/end)
+  → build_adjacency                  (graphe, zones bloquées exclues)
+  → dijkstra + reconstruct_path      (chemin le plus court, un seul drone)
+  → planifier_tous_les_drones        (chemin de chaque drone + attente si conflit)
+  → organiser_par_tour               (regroupement par tour)
+  → afficher_simulation              (texte au format attendu par le sujet)
+```
+
+## Ce qui reste à faire
+
+- [ ] Gestion des **erreurs de parsing** (fichier mal formé → message clair avec numéro de ligne, VII.4)
+- [ ] Transformer le parser et l'algo en vraies **classes** (`MapParser`, `Simulator`...) pour être pleinement orienté objet
+- [ ] Gérer la capacité des **connexions** (`max_link_capacity`) — actuellement seule la capacité des zones est vérifiée
+- [ ] Gérer correctement les zones `restricted` dans la sortie : le drone est "en transit sur la connexion" pendant 2 tours et devrait apparaître avec le format `D<ID>-<connection>` pendant ce temps (actuellement traité comme un saut direct)
+- [ ] Ajouter la **visualisation** (pygame — écran, zones, connexions, animation des drones)
+- [ ] Écrire le vrai `README.md` du projet (format imposé par le sujet, Chapitre VIII)
