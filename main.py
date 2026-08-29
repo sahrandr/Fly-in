@@ -1,156 +1,278 @@
 import pygame
-from parser import parse_map
-from algo import build_adjacency, dijkstra, reconstruct_path, planifier_tous_les_drones, organiser_par_tour
+from PIL import Image
 
-# 1. INITIALISATION DE PYGAME
-pygame.init()
+from algo import Simulator
+from parser import MapParser
 
-# 2. CHARGEMENT DE LA CARTE ET CALCUL DES CHEMINS
-# Lecture du fichier de carte -> on récupère les zones, les connexions
-# entre zones, la zone de départ, la zone d'arrivée et le nombre de drones
-resultat = parse_map("maps/easy/03_basic_capacity.txt")
-zones = resultat["zones"]
-connections = resultat["connections"]
 
-# Construction de la liste d'adjacence (quelle zone est reliée à quelle zone)
-adjacency = build_adjacency(zones, connections)
+class FlyInVisualizer:
+    """Gère toute la partie graphique (Pygame) de la simulation Fly-in.
 
-# Dijkstra : calcule la distance la plus courte depuis la zone de départ
-# vers toutes les autres zones, + le "previous" pour reconstruire le chemin
-distances, previous = dijkstra(adjacency, zones, resultat["start_zone"])
+    Une instance de cette classe s'occupe de :
+    - charger la carte et calculer le planning des drones (via Simulator)
+    - convertir les coordonnées logiques de la carte en pixels à l'écran
+    - charger et découper le spritesheet d'animation des drones
+    - teinter le sprite d'une couleur différente pour chaque drone
+    - charger et animer un fond de type GIF (caverne de lave)
+    - faire tourner la boucle de jeu (événements, dessin, avancement des tours)
+    """
 
-# Reconstruction du chemin le plus court entre start_zone et end_zone
-chemin = reconstruct_path(previous, resultat["start_zone"], resultat["end_zone"])
+    # --- Constantes de rendu ---
+    SCALE = 100
+    OFFSET_X, OFFSET_Y = 100, 350
+    WINDOW_SIZE = (900, 700)
+    TAILLE_DRONE = 80
+    NB_FRAMES = 4
+    FPS = 60
+    TOURS_PAR_SECONDE = 60
+    FRAMES_PAR_ANIMATION = 6
+    DELAI_BG_MS = 100  # vitesse d'animation du fond (même rythme que le gif d'origine)
+    VOILE_ALPHA = 140  # opacite du voile sombre pose sur le fond (0=invisible, 255=opaque)
 
-# Répartit ce chemin entre tous les drones disponibles
-tous_les_chemins = planifier_tous_les_drones(chemin, zones, resultat["nb_drones"])
+    COLOR_MAP = {
+        "green": (0, 180, 0),
+        "blue": (0, 100, 220),
+        "red": (200, 0, 0),
+        "orange": (230, 140, 0),
+        "yellow": (230, 200, 0),
+        "gray": (150, 150, 150),
+        "none": (100, 100, 100),
+        "rainbow": (255, 0, 255),
+    }
 
-# Réorganise les déplacements par numéro de tour :
-# par_tour[numero_tour] = liste de (drone_id, zone_a_atteindre)
-par_tour = organiser_par_tour(tous_les_chemins)
+    COULEURS_DRONES = [
+        (255, 0, 0),      # D1 - rouge
+        (0, 255, 0),      # D2 - vert
+        (0, 100, 255),    # D3 - bleu
+        (255, 165, 0),    # D4 - orange
+        (255, 0, 255),    # D5 - magenta
+        (0, 255, 255),    # D6 - cyan
+    ]
 
-print(par_tour)  # debug : affiche le planning tour par tour
+    def __init__(self, map_path: str, sprite_path: str, background_path: str) -> None:
+        """Initialise Pygame, charge la carte, calcule le planning, prépare les sprites et le fond."""
+        pygame.init()
 
-# 3. CONVERSION COORDONNÉES CARTE -> COORDONNÉES ÉCRAN (PIXELS)
-SCALE = 100                     # 1 unité de carte = 100 pixels à l'écran
-OFFSENT_X, OFFSENT_Y = 100, 350 # décalage pour centrer/positionner la carte à l'écran
+        # 1. CHARGEMENT DE LA CARTE ET CALCUL DES CHEMINS
+        self.parsed = MapParser(map_path).parse()
+        assert self.parsed.start_zone is not None
 
-def map_to_pixel(x: int, y: int) -> tuple[int, int]:
-    """Convertit une coordonnée logique de la carte (x, y) en position pixel à l'écran."""
-    return OFFSENT_X + x * SCALE, OFFSENT_Y + y * SCALE
+        self.simulator = Simulator(self.parsed)
+        self.par_tour: dict[int, list[tuple[str, str]]] = self.simulator.run()
+        self.nombre_max_tours = max(self.par_tour.keys()) if self.par_tour else 0
 
-# Couleur affichée pour chaque zone selon sa couleur logique définie dans la carte
-COLOR_MAP = {
-    "green": (0, 180, 0),
-    "blue": (0, 100, 220),
-    "red": (200, 0, 0),
-    "orange": (230, 140, 0),
-    "yellow": (230, 200, 0),
-    "gray": (150, 150, 150),
-    "none": (100, 100, 100),
-    "rainbow": (255, 0, 255),
-}
+        # 2. PRÉ-CALCUL : position en pixels de chaque zone
+        self.zone_pixels: dict[str, tuple[int, int]] = {
+            name: self._map_to_pixel(zone.x, zone.y)
+            for name, zone in self.parsed.zones.items()
+        }
 
-# 4. VARIABLES DE SIMULATION (avancement des tours de jeu)
-tour_simulation = 0
-nombre_max_tours = max(par_tour.keys())  # dernier tour du planning
+        # 3. CRÉATION DE LA FENÊTRE PYGAME
+        self.screen = pygame.display.set_mode(self.WINDOW_SIZE)
+        pygame.display.set_caption("Fly-in Simulation")
+        self.clock = pygame.time.Clock()
 
-# Pré-calcul : position en pixels de chaque zone (évite de refaire le calcul
-# à chaque frame dans la boucle principale)
-zone_pixels = {}
-for name, zone in zones.items():
-    zone_pixels[name] = map_to_pixel(zone.x, zone.y)
+        # 4. POSITION INITIALE DE CHAQUE DRONE (tous à la zone de départ)
+        self.drone_positions: dict[str, str] = {
+            f"D{i}": self.parsed.start_zone
+            for i in range(1, self.parsed.nb_drones + 1)
+        }
 
-# 5. CRÉATION DE LA FENÊTRE PYGAME
-screen = pygame.display.set_mode((900, 700))          # largeur x hauteur
-pygame.display.set_caption("Fly-in Simulation")
-clock = pygame.time.Clock()
-# clock.tick(60) plus bas : force la boucle à tourner à 60 images/seconde
-# c'est ce qui rend notre "compteur" fiable (voir bloc 8)
+        # 5. CHARGEMENT DU SPRITE SHEET DU DRONE (sprite "neutre", non teinté)
+        self.frames = self._load_sprite_frames(sprite_path)
 
-# 6. POSITION INITIALE DE CHAQUE DRONE (tous à la zone de départ)
-drone_positions = {}
-for i in range(1, resultat["nb_drones"] + 1):
-    drone_id = f"D{i}"
-    drone_positions[drone_id] = resultat["start_zone"]
+        # 5bis. PRÉ-CALCUL des versions TEINTÉES du sprite, une par drone.
+        # Fait une seule fois ici, au lancement, car teinter une image a un
+        # cout de calcul non negligeable a repeter 60 fois par seconde.
+        self.frames_par_drone: dict[str, list[pygame.Surface]] = {}
+        for i in range(1, self.parsed.nb_drones + 1):
+            drone_id = f"D{i}"
+            couleur = self._couleur_pour_drone(drone_id)
+            self.frames_par_drone[drone_id] = [
+                self._teinter_sprite(frame, couleur) for frame in self.frames
+            ]
 
-# 7. CHARGEMENT DU SPRITE SHEET DU DRONE (animation de vol)
-# Chargé une seule fois AVANT la boucle while, pour ne pas relire
-# le fichier image à chaque frame (ce serait très lent)
-sprite_sheet = pygame.image.load("FLYING.png").convert_alpha()
+        # 6. CHARGEMENT DU FOND ANIME (gif de caverne de lave), avec un voile
+        # sombre applique une seule fois sur chaque frame pour garder les
+        # zones/connexions bien lisibles par-dessus ce fond tres detaille.
+        self.background_frames = self._load_gif_frames(background_path)
+        self._appliquer_voile(self.background_frames, self.VOILE_ALPHA)
+        self.background_frame_actuelle = 0
+        self.dernier_changement_bg = pygame.time.get_ticks()
 
-TAILLE_DRONE = 80   # taille (en pixels) à laquelle chaque drone sera affiché
-NB_FRAMES = 4        # nombre d'images d'animation dans le spritesheet
-largeur_totale = sprite_sheet.get_width()
-hauteur_totale = sprite_sheet.get_height()
-largeur_frame = largeur_totale // NB_FRAMES  # largeur d'une seule frame
+        # 7. VARIABLES D'ÉTAT DE LA BOUCLE DE JEU
+        self.tour_simulation = 0
+        self.frame_actuelle = 0
+        self.compteur = 0
+        self.dernier_changement = pygame.time.get_ticks()
+        self.running = True
 
-# Découpage du spritesheet en NB_FRAMES images individuelles,
-# redimensionnées à TAILLE_DRONE x TAILLE_DRONE
-frames = []
-for i in range(NB_FRAMES):
-    rect = pygame.Rect(i * largeur_frame, 0, largeur_frame, hauteur_totale)
-    frame = sprite_sheet.subsurface(rect).copy()
-    frame = pygame.transform.scale(frame, (TAILLE_DRONE, TAILLE_DRONE))
-    frames.append(frame)
+    # ------------------------------------------------------------------
+    # Chargement / préparation des ressources (appelé une seule fois)
+    # ------------------------------------------------------------------
 
-frame_actuelle = 0  # index de la frame d'animation actuellement affichée
-compteur = 0         # compteur simple : +1 à chaque tour de boucle (~60 fois/seconde)
+    def _map_to_pixel(self, x: int, y: int) -> tuple[int, int]:
+        """Convertit une coordonnée logique de la carte (x, y) en position pixel à l'écran."""
+        return self.OFFSET_X + x * self.SCALE, self.OFFSET_Y + y * self.SCALE
 
-# 8. BOUCLE PRINCIPALE DU JEU
-running = True
-while running:
+    def _load_sprite_frames(self, sprite_path: str) -> list[pygame.Surface]:
+        """Découpe le spritesheet en NB_FRAMES images individuelles, redimensionnées."""
+        sprite_sheet = pygame.image.load(sprite_path).convert_alpha()
 
-    # --- Gestion des événements (fermeture de la fenêtre, etc.) ---
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            running = False
+        largeur_totale = sprite_sheet.get_width()
+        hauteur_totale = sprite_sheet.get_height()
+        largeur_frame = largeur_totale // self.NB_FRAMES
 
-    # --- Fond d'écran blanc (efface l'image précédente) ---
-    screen.fill((255, 255, 255))
+        frames = []
+        for i in range(self.NB_FRAMES):
+            rect = pygame.Rect(i * largeur_frame, 0, largeur_frame, hauteur_totale)
+            frame = sprite_sheet.subsurface(rect).copy()
+            frame = pygame.transform.scale(frame, (self.TAILLE_DRONE, self.TAILLE_DRONE))
+            frames.append(frame)
 
-    # --- Dessin des connexions entre zones (les lignes/routes) ---
-    for conn in connections:
-        pygame.draw.line(screen, (150, 150, 150), zone_pixels[conn.zone_a], zone_pixels[conn.zone_b], 3)
+        return frames
 
-    # --- Dessin des zones (les cercles colorés) ---
-    for name, zone in zones.items():
-        px, py = zone_pixels[name]
-        couleur = COLOR_MAP.get(zone.color, COLOR_MAP["none"])
-        pygame.draw.circle(screen, couleur, (px, py), 25)
+    def _load_gif_frames(self, gif_path: str) -> list[pygame.Surface]:
+        """Extrait toutes les frames d'un GIF animé et les convertit en Surfaces pygame,
+        redimensionnées à la taille de la fenêtre."""
+        gif = Image.open(gif_path)
+        frames = []
 
-    # --- Compteur : avance de 1 à chaque tour de boucle ---
-    # Comme clock.tick(60) fixe la boucle à 60 fois/seconde :
-    #   12 tours de boucle ≈ 0.2 seconde
-    #   60 tours de boucle ≈ 1 seconde
-    compteur += 1
+        for i in range(gif.n_frames):
+            gif.seek(i)
+            frame_rgba = gif.convert("RGBA")
+            data = frame_rgba.tobytes()
+            surface = pygame.image.fromstring(data, frame_rgba.size, "RGBA")
+            surface = pygame.transform.scale(surface, self.WINDOW_SIZE)
+            frames.append(surface)
 
-    # --- Bloc animation : fait avancer les frames de vol (ailes qui battent) ---
-    # Se déclenche toutes les 12 boucles (~0.2s), en continu,
-    # indépendamment du tour de simulation
-    if compteur % 6 == 0:
-        frame_actuelle = (frame_actuelle + 1) % len(frames)
+        return frames
 
-    # --- Bloc A : avancer le tour de simulation toutes les 60 boucles (~1s) ---
-    # (met à jour drone_positions, NE DESSINE RIEN ici)
-    if compteur % 60 == 0 and tour_simulation < nombre_max_tours:
-        tour_simulation += 1
-        # Si ce tour contient des déplacements, on met à jour la position
-        # logique de chaque drone concerné
-        if tour_simulation in par_tour:
-            for drone_id, zone_name in par_tour[tour_simulation]:
-                drone_positions[drone_id] = zone_name
+    def _appliquer_voile(self, frames: list[pygame.Surface], alpha: int) -> None:
+        """Assombrit une liste de frames avec un voile semi-transparent, pour que
+        les zones/connexions restent bien visibles par-dessus un fond chargé."""
+        voile = pygame.Surface(self.WINDOW_SIZE)
+        voile.set_alpha(alpha)
+        voile.fill((0, 0, 0))
+        for frame in frames:
+            frame.blit(voile, (0, 0))
 
-    # --- Bloc B : dessiner CHAQUE drone à sa position actuelle, à CHAQUE frame ---
-    # (le dessin se fait à chaque image, même si la position ne change pas,
-    # pour que l'animation de vol continue de tourner)
-    for drone_id, zone_name in drone_positions.items():
-        px, py = zone_pixels[zone_name]
-        screen.blit(frames[frame_actuelle], (px - TAILLE_DRONE // 2, py - TAILLE_DRONE // 2))
+    def _couleur_pour_drone(self, drone_id: str) -> tuple[int, int, int]:
+        """Retourne une couleur distincte pour un drone donné, selon son numéro."""
+        numero = int(drone_id[1:])
+        index = (numero - 1) % len(self.COULEURS_DRONES)
+        return self.COULEURS_DRONES[index]
 
-    # --- Mise à jour de l'affichage ---
-    pygame.display.flip()
-    clock.tick(60)  # limite la boucle à 60 images par seconde
+    def _teinter_sprite(self, sprite: pygame.Surface, couleur: tuple[int, int, int]) -> pygame.Surface:
+        """Applique une teinte de couleur sur un sprite, en conservant sa forme/ombres."""
+        sprite_teinte = sprite.copy()
+        sprite_teinte.fill(couleur, special_flags=pygame.BLEND_RGBA_MULT)
+        return sprite_teinte
 
-# 9. FERMETURE PROPRE DE PYGAME
-pygame.quit()
+    # ------------------------------------------------------------------
+    # Boucle principale
+    # ------------------------------------------------------------------
+
+    def run(self) -> None:
+        """Boucle principale du jeu : événements, dessin, animation, avancement des tours."""
+        while self.running:
+            self._handle_events()
+            self._draw_frame()
+
+            self.compteur += 1
+            self._advance_animation()
+            self._advance_simulation()
+            self._advance_background()
+
+            pygame.display.flip()
+            self.clock.tick(self.FPS)
+
+        pygame.quit()
+
+    def _handle_events(self) -> None:
+        """Gère les événements Pygame (fermeture de la fenêtre, etc.)."""
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                self.running = False
+
+    # Dessin
+    def _draw_frame(self) -> None:
+        """Dessine une image complète : fond animé, connexions, zones, puis drones."""
+        self.screen.blit(self.background_frames[self.background_frame_actuelle], (0, 0))
+        self._draw_connections()
+        self._draw_zones()
+        self._draw_drones()
+
+    def _draw_connections(self) -> None:
+        """Dessine les lignes représentant les connexions entre zones."""
+        for conn in self.parsed.connections:
+            pygame.draw.line(
+                self.screen,
+                (150, 150, 150),
+                self.zone_pixels[conn.zone_a],
+                self.zone_pixels[conn.zone_b],
+                3,
+            )
+
+    def _draw_zones(self) -> None:
+        """Dessine les zones sous forme de cercles colorés."""
+        for name, zone in self.parsed.zones.items():
+            px, py = self.zone_pixels[name]
+            couleur = self.COLOR_MAP.get(zone.color, self.COLOR_MAP["none"])
+            pygame.draw.circle(self.screen, couleur, (px, py), 25)
+
+    def _draw_drones(self) -> None:
+        """
+        Dessine chaque drone à sa position actuelle, avec son propre sprite
+        teinté, et un léger décalage si plusieurs drones partagent la même zone.
+        """
+        drones_par_zone: dict[str, list[str]] = {}
+        for drone_id, zone_name in self.drone_positions.items():
+            drones_par_zone.setdefault(zone_name, []).append(drone_id)
+
+        for zone_name, liste_drones in drones_par_zone.items():
+            px, py = self.zone_pixels[zone_name]
+
+            for index, drone_id in enumerate(liste_drones):
+                decalage_x = (index % 3) * 20 - 20
+                decalage_y = (index // 3) * 20 - 20
+                centre = (px + decalage_x, py + decalage_y)
+
+                sprite_du_drone = self.frames_par_drone[drone_id][self.frame_actuelle]
+                self.screen.blit(
+                    sprite_du_drone,
+                    (centre[0] - self.TAILLE_DRONE // 2, centre[1] - self.TAILLE_DRONE // 2),
+                )
+
+    # Avancement des animations / de la simulation
+    def _advance_animation(self) -> None:
+        """Fait avancer les frames de vol des drones (ailes qui battent), en continu."""
+        if self.compteur % self.FRAMES_PAR_ANIMATION == 0:
+            self.frame_actuelle = (self.frame_actuelle + 1) % len(self.frames)
+
+    def _advance_background(self) -> None:
+        """Fait avancer l'animation du fond (feu qui vacille), en continu."""
+        maintenant = pygame.time.get_ticks()
+        if maintenant - self.dernier_changement_bg >= self.DELAI_BG_MS:
+            self.background_frame_actuelle = (self.background_frame_actuelle + 1) % len(self.background_frames)
+            self.dernier_changement_bg = maintenant
+
+    def _advance_simulation(self) -> None:
+        """Avance le tour de simulation une fois par seconde environ, et met à
+        jour la position logique de chaque drone concerné par ce tour."""
+        tour_pas_encore_termine = self.tour_simulation < self.nombre_max_tours
+        if self.compteur % self.TOURS_PAR_SECONDE == 0 and tour_pas_encore_termine:
+            self.tour_simulation += 1
+
+            if self.tour_simulation in self.par_tour:
+                for drone_id, zone_name in self.par_tour[self.tour_simulation]:
+                    self.drone_positions[drone_id] = zone_name
+
+
+if __name__ == "__main__":
+    visualizer = FlyInVisualizer(
+        "maps/easy/03_basic_capacity.txt",
+        "FLYING.png",
+        "assets/h1ll.gif",
+    )
+    visualizer.run()
