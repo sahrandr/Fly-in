@@ -107,10 +107,7 @@ class FlyInVisualizer:
         self.dernier_changement = pygame.time.get_ticks()
         self.running = True
 
-    # ------------------------------------------------------------------
     # Chargement / préparation des ressources (appelé une seule fois)
-    # ------------------------------------------------------------------
-
     def _map_to_pixel(self, x: int, y: int) -> tuple[int, int]:
         """Convertit une coordonnée logique de la carte (x, y) en position pixel à l'écran."""
         return self.OFFSET_X + x * self.SCALE, self.OFFSET_Y + y * self.SCALE
@@ -169,10 +166,7 @@ class FlyInVisualizer:
         sprite_teinte.fill(couleur, special_flags=pygame.BLEND_RGBA_MULT)
         return sprite_teinte
 
-    # ------------------------------------------------------------------
     # Boucle principale
-    # ------------------------------------------------------------------
-
     def run(self) -> None:
         """Boucle principale du jeu : événements, dessin, animation, avancement des tours."""
         while self.running:
