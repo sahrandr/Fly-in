@@ -20,14 +20,14 @@ class FlyInVisualizer:
     # --- Constantes de rendu ---
     SCALE = 100
     OFFSET_X, OFFSET_Y = 100, 350
-    WINDOW_SIZE = (900, 700)
+    WINDOW_SIZE = (1800, 1000)
     TAILLE_DRONE = 80
     NB_FRAMES = 4
     FPS = 60
     TOURS_PAR_SECONDE = 60
     FRAMES_PAR_ANIMATION = 6
     DELAI_BG_MS = 100  # vitesse d'animation du fond (même rythme que le gif d'origine)
-    VOILE_ALPHA = 140  # opacite du voile sombre pose sur le fond (0=invisible, 255=opaque)
+    VOILE_ALPHA = 90  # opacite du voile sombre pose sur le fond (0=invisible, 255=opaque)
 
     COLOR_MAP = {
         "green": (0, 180, 0),
@@ -265,7 +265,7 @@ class FlyInVisualizer:
 
 if __name__ == "__main__":
     visualizer = FlyInVisualizer(
-        "maps/easy/03_basic_capacity.txt",
+        "maps/medium/02_circular_loop.txt",
         "FLYING.png",
         "assets/h1ll.gif",
     )

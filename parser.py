@@ -136,7 +136,6 @@ class MapParser:
         reste = ligne.split(":", 1)[1].strip()
         return int(reste)
 
-
 if __name__ == "__main__":
     parsed = MapParser("maps/easy/03_basic_capacity.txt").parse()
 

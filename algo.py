@@ -62,6 +62,20 @@ class Graph:
         else:
             return 1
 
+    def _trouver_connection(self, zone_a: str, zone_b: str) -> Connection:
+        """Trouve la Connection entre deux zones, peu importe l'ordre donné."""
+        for conn in self.parsed_map.connections:
+            if (conn.zone_a == zone_a and conn.zone_b == zone_b) or (conn.zone_a == zone_b and conn.zone_b == zone_a):
+                return conn
+
+        raise ValueError(f"No connection found between {zone_a} and {zone_b}")
+
+    def find_connection(self, zone_a: str, zone_b: str) -> Connection:
+        """Trouve la Connection entre deux zones, peu importe l'ordre donné."""
+        for conn in self.connections:
+            if (conn.zone_a == zone_a and conn.zone_b == zone_b) or (conn.zone_a == zone_b and conn.zone_b == zone_a):
+                return conn
+        raise ValueError(f"No connection found between {zone_a} and {zone_b}")
 
 class PathFinder:
     """Calcule le chemin le moins coûteux entre deux zones d'un Graph."""
@@ -193,6 +207,47 @@ class OccupationRegistry:
         return max_capacity > nbr_zone
 
 
+class LinkOccupationRegistry:
+    """
+    Registre qui garde la trace de 'quelle connexion est empruntée, par
+    quel drone, à quel tour'.
+
+    Structure interne : {(zone_a, zone_b) trié: {tour: [liste_de_drone_ids]}}
+    Exemple : {('start', 'waypoint1'): {1: ['D1', 'D2']}}
+    """
+
+    def __init__(self) -> None:
+        self._occupation: dict[tuple[str, str], dict[int, list[str]]] = {}
+
+    def _cle(self, zone_a: str, zone_b: str) -> tuple[str, str]:
+        """Retourne une clé unique pour identifier une connexion, peu importe le sens."""
+        return tuple(sorted([zone_a, zone_b]))
+
+    def register(self, drone_id: str, zone_a: str, zone_b: str, tour: int) -> None:
+        """Enregistre qu'un drone a traversé cette connexion à ce tour."""
+        cle = self._cle(zone_a, zone_b)
+
+        if cle not in self._occupation:
+            self._occupation[cle] = {}
+
+        if tour not in self._occupation[cle]:
+            self._occupation[cle][tour] = []
+
+        self._occupation[cle][tour].append(drone_id)
+
+    def is_available(self, zone_a: str, zone_b: str, tour: int, max_capacity: int) -> bool:
+        """Vérifie si une connexion a encore de la capacité pour un drone de plus à ce tour."""
+        cle = self._cle(zone_a, zone_b)
+
+        if cle not in self._occupation:
+            nb_deja_present = 0
+        elif tour not in self._occupation[cle]:
+            nb_deja_present = 0
+        else:
+            nb_deja_present = len(self._occupation[cle][tour])
+
+        return max_capacity > nb_deja_present
+
 class Drone:
     """Un drone individuel, capable de planifier son propre trajet."""
 
@@ -202,38 +257,73 @@ class Drone:
         # a effectivement calculé son trajet
         self.schedule: dict[str, int] = {}
 
-    def plan(self, chemin: list[str], graph: Graph, occupation: OccupationRegistry) -> None:
-        """
-        Calcule à quel tour ce drone arrive à chaque zone de son chemin,
-        en insérant de l'attente si une zone est déjà occupée, puis
-        enregistre son passage dans le registre d'occupation partagé
-        (pour que les drones suivants voient qu'il est passé par là).
-        """
-        # la première zone, c'est le départ -> tour 0, toujours possible
+    def plan(
+        self,
+        chemin: list[str],
+        graph: Graph,
+        occupation: OccupationRegistry,
+        link_occupation: LinkOccupationRegistry,
+    ) -> None:
         schedule: dict[str, int] = {chemin[0]: 0}
         tour_actuel = 0
 
         for i in range(1, len(chemin)):
+            zone_precedente = chemin[i - 1]
             zone_name = chemin[i]
 
-            # le coût normal pour atteindre cette zone (1 ou 2 tours)
             cout = graph.zone_cost(zone_name)
             tour_arrivee = tour_actuel + cout
 
-            # tant que la zone n'est pas disponible à ce tour (capacité
-            # atteinte), on attend un tour de plus avant d'y entrer
-            max_capacite = graph.zones[zone_name].max_drones
-            while not occupation.is_available(zone_name, tour_arrivee, max_capacite):
+            max_capacite_zone = graph.zones[zone_name].max_drones
+            connexion = graph.find_connection(zone_precedente, zone_name)
+            max_capacite_lien = connexion.max_link_capacity
+
+            while (
+                not occupation.is_available(zone_name, tour_arrivee, max_capacite_zone)
+                or not link_occupation.is_available(zone_precedente, zone_name, tour_arrivee, max_capacite_lien)
+            ):
                 tour_arrivee += 1
 
             schedule[zone_name] = tour_arrivee
             tour_actuel = tour_arrivee
 
-        # une fois le trajet calculé, on le mémorise sur l'instance ET on
-        # le déclare dans le registre partagé, pour les drones suivants
         self.schedule = schedule
         occupation.register(self.drone_id, schedule)
 
+        zones_du_chemin = list(schedule.keys())
+        for i in range(1, len(zones_du_chemin)):
+            link_occupation.register(
+                self.drone_id, zones_du_chemin[i - 1], zones_du_chemin[i], schedule[zones_du_chemin[i]]
+            )
+
+class Simulator:
+    def __init__(self, parsed_map: ParsedMap) -> None:
+        self.parsed_map = parsed_map
+        self.graph = Graph(parsed_map.zones, parsed_map.connections)
+        self.pathfinder = PathFinder(self.graph)
+        self.occupation = OccupationRegistry()
+        self.link_occupation = LinkOccupationRegistry()
+        self.drones: list[Drone] = []
+
+    def run(self) -> dict[int, list[tuple[str, str]]]:
+        assert self.parsed_map.start_zone is not None
+        assert self.parsed_map.end_zone is not None
+
+        chemin = self.pathfinder.shortest_path(
+            self.parsed_map.start_zone, self.parsed_map.end_zone
+        )
+
+        for numero in range(1, self.parsed_map.nb_drones + 1):
+            drone = Drone(f"D{numero}")
+            drone.plan(
+                chemin,
+                self.graph,
+                self.occupation,
+                self.link_occupation
+            )
+            self.drones.append(drone)
+
+        return self._organiser_par_tour()
 
 class Simulator:
     """Orchestre le parsing, le pathfinding et la planification de tous les drones."""
@@ -246,6 +336,7 @@ class Simulator:
         # c'est ce qui force naturellement l'attente en cas de conflit
         self.occupation = OccupationRegistry()
         self.drones: list[Drone] = []
+        self.link_occupation = LinkOccupationRegistry()
 
     def run(self) -> dict[int, list[tuple[str, str]]]:
         """Calcule le chemin partagé, planifie tous les drones, et regroupe par tour."""
@@ -265,7 +356,7 @@ class Simulator:
         # les réservations déjà faites par les drones précédents
         for numero in range(1, self.parsed_map.nb_drones + 1):
             drone = Drone(f"D{numero}")
-            drone.plan(chemin, self.graph, self.occupation)
+            drone.plan(chemin, self.graph, self.occupation, self.link_occupation)
             self.drones.append(drone)
 
         return self._organiser_par_tour()
