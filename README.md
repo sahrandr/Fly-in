@@ -149,23 +149,146 @@ D1-goal D2-goal D3-wide_area D4-wide_area
 D3-goal D4-goal
 ```
 
+## 10. Passage en architecture orientée objet complète
+
+### Objectif
+Respecter la contrainte du sujet (Chapitre V : *"The project must be completely object-oriented"*), en remplaçant les fonctions libres par des classes dédiées, chacune avec une seule responsabilité.
+
+### Classes obtenues (dans `algo.py`)
+- `Graph` — encapsule `zones`, `connections`, l'adjacence (`_build_adjacency`), et `zone_cost`. Construit l'adjacence une seule fois à la création, pas recalculée à chaque appel.
+- `PathFinder` — encapsule Dijkstra (`_dijkstra`) et la reconstruction de chemin (`_reconstruct_path`), exposés via une seule méthode publique `shortest_path(start, end)`.
+- `OccupationRegistry` — le registre d'occupation des zones (équivalent de `add_to_occupation`/`zone_disponible`, mais en classe : `register()` et `is_available()`).
+- `Drone` — un drone individuel, avec son `drone_id` et sa méthode `plan()` qui calcule son propre trajet en tenant compte d'un `OccupationRegistry` partagé.
+- `Simulator` — orchestre tout : construit le `Graph`, le `PathFinder`, les `Drone`, et regroupe le résultat par tour (`run()`, `_organiser_par_tour()`, `display()`).
+
+### Piège rencontré et corrigé
+Une classe `Simulator` a été accidentellement définie deux fois dans le même fichier — en Python, la deuxième définition écrase silencieusement la première, ce qui masquait le bug sans lever d'erreur immédiate. Un bug d'indentation similaire (une méthode désindentée par erreur, sortie de sa classe) a provoqué une `AttributeError` du type *"object has no attribute"* alors que la méthode existait bien dans le fichier, juste au mauvais niveau d'indentation.
+
+### `ParsedMap` (dans `parser.py`)
+Une classe qui regroupe le résultat complet du parsing (`nb_drones`, `start_zone`, `end_zone`, `zones`, `connections`), avec des valeurs par défaut dans `__init__()` — donc s'instancie sans argument (`ParsedMap()`), à ne pas confondre avec un appel avec mots-clés qui ferait planter le constructeur.
+
+## 11. Capacité des connexions (`max_link_capacity`)
+
+### Le problème
+La capacité des zones (`max_drones`) était déjà gérée, mais pas celle des connexions (`max_link_capacity`) — un drone pouvait emprunter n'importe quelle connexion sans limite.
+
+### La difficulté : identifier une connexion de façon unique
+Une connexion est bidirectionnelle (`a-b` ou `b-a`), donc il faut une clé qui donne le même résultat peu importe le sens :
+```python
+def _cle(self, zone_a: str, zone_b: str) -> tuple[str, str]:
+    return tuple(sorted([zone_a, zone_b]))
+```
+`sorted([...])` trie alphabétiquement, donc `("start", "waypoint1")` est obtenu que l'entrée soit `start, waypoint1` ou `waypoint1, start`.
+
+### `LinkOccupationRegistry`
+Même structure et principe que `OccupationRegistry`, mais indexée par cette clé triée plutôt que par un simple nom de zone : `{(zone_a, zone_b) triée: {tour: [drone_ids]}}`.
+
+### Piège rencontré et corrigé (import circulaire)
+`algo.py` important depuis `parser.py`, et `parser.py` important depuis `algo.py` en retour (pour une exception `MapParsingError`) créait un import circulaire, provoquant une `ImportError` déroutante. Solution : l'exception doit vivre dans le fichier qui en a la responsabilité logique (`parser.py`, puisqu'elle concerne des erreurs de parsing), et les autres fichiers l'importent depuis là — jamais l'inverse.
+
+### Résultat testé
+Sur une carte de test avec `max_link_capacity=1` et 3 drones, chaque drone traverse la connexion limitée **un par un**, à des tours différents, plutôt que tous simultanément.
+
+## 12. Gestion d'erreurs de parsing (VII.4)
+
+### Principe général
+Une exception personnalisée, `MapParsingError`, levée avec un message qui précise toujours le **numéro de ligne** et la **cause**, plutôt que de laisser Python planter avec une erreur brute.
+
+### Suivi du numéro de ligne
+```python
+for numero_ligne, ligne in enumerate(f, start=1):
+```
+`enumerate(f, start=1)` donne `(numero_ligne, ligne)` à chaque itération, en commençant à `1` (plus naturel pour un humain que `0`).
+
+### Validations mises en place
+- **Type de zone invalide** — vérifie que `zone_type` fait partie de `{normal, blocked, restricted, priority}`
+- **`max_drones`/`max_link_capacity`/`nb_drones` positifs** — `_valider_capacite` vérifie qu'une chaîne est un entier positif (`.isdigit()` rejette déjà les nombres négatifs, puisque le signe `-` n'est pas un chiffre) avant de la convertir
+- **Connexion vers une zone non définie** — vérifie que `zone_a` et `zone_b` existent déjà dans `result.zones` au moment du parsing de la ligne `connection:`
+- **Connexion dupliquée** (a-b == b-a) — compare la clé triée de la nouvelle connexion à celles déjà enregistrées
+- **Doublon de `start_hub:`/`end_hub:`** — vérifie que `result.start_zone`/`result.end_zone` valent encore `None` avant de les assigner
+- **Absence de `start_hub:`/`end_hub:`** — vérifiée après la boucle de parsing complète, puisqu'on ne peut être sûr de leur absence qu'une fois tout le fichier lu
+- **Ligne de format non reconnu** — un `else` final dans `_parse_line` qui lève une erreur si aucun des `elif` ne correspond
+
+## 13. Zones `restricted` en transit (format `D<ID>-<connection>`)
+
+### Le problème
+Une zone `restricted` coûte 2 tours, mais était traitée comme un simple saut direct — le drone "disparaissait" un tour, sans jamais apparaître comme "en transit sur la connexion", contrairement à ce qu'exige le sujet (VII.3/VII.5).
+
+### La restructuration
+`Drone` ne stocke plus seulement `{zone: tour_arrivee}` (le `schedule`), mais aussi une liste `events` de `(tour, ce_qui_s_affiche)` :
+- zone `normal`/`priority` (coût 1) → une seule entrée `(tour, zone_name)`
+- zone `restricted` (coût 2) → deux entrées : `(tour - 1, nom_connexion)` (transit) puis `(tour, zone_name)` (arrivée)
+
+Le nom de la connexion pendant le transit est simplement la concaténation des deux noms de zones : `f"{zone_precedente}{zone_name}"`.
+
+### `Simulator._organiser_par_tour` simplifiée
+Comme `events` ne contient plus jamais le tour 0 (départ), la vérification `if tour == 0: continue` a pu être retirée — la boucle se contente de regrouper chaque `(tour, destination)` par tour.
+
+### Résultat testé
+Sur une carte de test forçant le passage par une zone restricted (`start → roof1 (restricted) → goal`) :
+```
+D1-startroof1     <- tour 1 : transit vers roof1
+D1-roof1          <- tour 2 : arrivée à roof1
+D1-goal           <- tour 3 : arrivée à goal
+```
+
+## 14. Visualisation graphique (pygame)
+
+### Architecture — classe `FlyInVisualizer`
+Une seule classe qui encapsule toute la partie graphique : chargement de la carte et du planning (via `Simulator`), conversion coordonnées carte → pixels, chargement/découpage du spritesheet d'animation, boucle de jeu.
+
+### Principes clés
+- **`map_to_pixel(x, y)`** : convertit les coordonnées logiques (souvent petites, 0 à 5) en pixels à l'écran, via un `SCALE` et un `OFFSET` — sans ça, toute la carte serait collée dans un coin, minuscule
+- **Timing sans bloquer la fenêtre** : `pygame.time.get_ticks()` (millisecondes écoulées depuis le lancement) plutôt que `time.sleep()`, qui gèlerait complètement la fenêtre (elle deviendrait "ne répond pas" au niveau de l'OS)
+- **Animation par frames** : un spritesheet (plusieurs images côte à côte dans un seul PNG) est découpé avec `pygame.Rect` + `.subsurface()`, puis les frames défilent en boucle avec le même principe de chronomètre que ci-dessus
+- **GIF animé en fond** : pygame ne lit pas nativement les GIF multi-frames — Pillow (`PIL.Image`) sert de traducteur : `.seek(i)` déplace le curseur de lecture vers la frame `i`, `.tobytes()` puis `pygame.image.fromstring(...)` reconstruit une vraie `Surface` pygame à partir des données brutes
+- **Teinte par drone** : `surface.fill(couleur, special_flags=pygame.BLEND_RGBA_MULT)` teinte un sprite tout en conservant ses ombres/contours (contrairement à peindre un carré uni par-dessus) — toujours appelé sur une `.copy()` de l'image, sinon ça modifierait l'original de façon permanente pour tous les drones
+- **Anti-superposition** : les drones partageant une même zone sont légèrement décalés (petite grille de décalages `(index % 3, index // 3)`), sinon ils se dessinent exactement au même endroit et se cachent mutuellement
+- **Mise à l'échelle dynamique** : `SCALE`/`OFFSET` fixes fonctionnent pour les petites cartes, mais une carte aux coordonnées plus grandes (ex: x=21) sort du cadre visible avec des valeurs fixes — la solution est de calculer `SCALE`/`OFFSET` dynamiquement à partir du min/max réel des coordonnées de la carte chargée
+
+### Pièges rencontrés et corrigés
+- Une méthode `_draw_drones` mal ordonnée mélangeait mise à jour de position et dessin dans le même bloc — la mise à jour doit se faire une fois par tour (dans la logique de simulation), le dessin à chaque frame (60x/seconde), jamais les deux confondus dans la même boucle
+- `clock.tick(0.8)` au lieu de `clock.tick(60)` rendait l'animation extrêmement saccadée (0.8 image par seconde)
+
+## 15. Exploration de raylib/pyray (nouvelle bibliothèque 3D)
+
+### Contexte
+Après avoir terminé un visualiseur pygame fonctionnel, exploration d'une bibliothèque 3D (raylib, via son wrapper Python `pyray`) à but d'apprentissage personnel, en parallèle du projet Fly-in.
+
+### Problème d'installation rencontré et sa cause exacte
+`from pyray import *` puis `init_window(...)` levait `NameError: name 'init_window' is not defined`, malgré `pyray` visiblement installé.
+
+**Cause racine** : il existe sur PyPI un package nommé `pyray` totalement indépendant du vrai projet raylib — un package vide/placeholder (version `0.1.0`, aucune fonction réelle). Un conflit de nom malheureux. Le vrai module `pyray` (les bindings Python de raylib) est censé être installé **automatiquement**, comme un second dossier, par `pip install raylib` — il ne faut **jamais** faire `pip install pyray` séparément (confirmé par la documentation officielle du projet `raylib-python-cffi`).
+
+**Complication supplémentaire** : après avoir désinstallé le faux `pyray` (`pip uninstall pyray -y`), l'erreur persistait — le dossier `pyray/` existait toujours sur le disque, mais **sans fichier `__init__.py`** à l'intérieur (un résidu vide, laissé par l'installation précédente et non nettoyé par la désinstallation).
+
+**Solution en cours** : supprimer manuellement ce dossier résiduel (`rm -rf .../site-packages/pyray`), puis réinstaller `raylib` en forçant (`pip install --force-reinstall --no-cache-dir raylib`) pour que le vrai module `pyray` (avec son `__init__.py` complet) soit recréé correctement à cette place.
+
+### Comparaison Ursina vs raylib (pour référence future)
+- **Ursina** : très haut niveau, installation simple, boucle de jeu automatique (`app.run()`), bon point d'entrée pour découvrir la 3D rapidement, mais moins transférable à d'autres technologies
+- **raylib** : plus bas niveau (boucle `while` à gérer soi-même, comme pygame), installation plus capricieuse selon la plateforme/version Python, mais concepts (caméra, matrices, boucle de rendu) transférables à d'autres langages/moteurs, grosse communauté gamedev indé
+
 ## Pipeline complet obtenu à ce stade
 
 ```
 fichier .txt
-  → parse_map                        (Zone, Connection, nb_drones, start/end)
-  → build_adjacency                  (graphe, zones bloquées exclues)
-  → dijkstra + reconstruct_path      (chemin le plus court, un seul drone)
-  → planifier_tous_les_drones        (chemin de chaque drone + attente si conflit)
-  → organiser_par_tour               (regroupement par tour)
-  → afficher_simulation              (texte au format attendu par le sujet)
+  → MapParser.parse()                (ParsedMap : Zone, Connection, nb_drones, start/end)
+                                        avec validations d'erreurs à chaque étape
+  → Graph                            (adjacence, zones bloquées exclues, zone_cost)
+  → PathFinder.shortest_path()       (Dijkstra + reconstruction, un seul drone)
+  → Simulator.run()                  (planifie chaque Drone, gère OccupationRegistry
+                                        + LinkOccupationRegistry, zones restricted en transit)
+  → Simulator._organiser_par_tour()  (regroupement par tour)
+  → Simulator.display()              (texte au format attendu par le sujet)
+  → FlyInVisualizer                  (pygame : zones, connexions, drones animés et
+                                        teintés, fond animé, rejoue la simulation calculée)
 ```
 
 ## Ce qui reste à faire
 
-- [ ] Gestion des **erreurs de parsing** (fichier mal formé → message clair avec numéro de ligne, VII.4)
-- [ ] Transformer le parser et l'algo en vraies **classes** (`MapParser`, `Simulator`...) pour être pleinement orienté objet
-- [ ] Gérer la capacité des **connexions** (`max_link_capacity`) — actuellement seule la capacité des zones est vérifiée
-- [ ] Gérer correctement les zones `restricted` dans la sortie : le drone est "en transit sur la connexion" pendant 2 tours et devrait apparaître avec le format `D<ID>-<connection>` pendant ce temps (actuellement traité comme un saut direct)
-- [ ] Ajouter la **visualisation** (pygame — écran, zones, connexions, animation des drones)
-- [ ] Écrire le vrai `README.md` du projet (format imposé par le sujet, Chapitre VIII)
+- [ ] Résoudre définitivement l'installation raylib/pyray (dossier résiduel à nettoyer + réinstallation forcée), si la suite du projet visuel se fait sur raylib plutôt que pygame
+- [ ] Écrire le `Makefile` (install/run/debug/clean/lint, Chapitre III.2)
+- [ ] Écrire le `.gitignore` (Chapitre III.3)
+- [ ] Vérifier le code avec `flake8` et `mypy --strict` (Chapitre III.1, V)
+- [ ] Écrire le vrai `README.md` du projet, au format imposé par le sujet (Chapitre VIII : première ligne italique avec login 42, sections Description/Instructions/Resources obligatoires)
+- [ ] Décider si la visualisation finale reste sur pygame (déjà fonctionnelle et complète) ou si l'exploration raylib est poussée jusqu'à remplacer pygame dans le rendu final

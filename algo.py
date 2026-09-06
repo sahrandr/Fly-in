@@ -10,8 +10,6 @@ class Graph:
     def __init__(self, zones: dict[str, Zone], connections: list[Connection]) -> None:
         self.zones = zones
         self.connections = connections
-        # l'adjacence est construite une seule fois à la création du Graph,
-        # pas recalculée à chaque appel -> évite de refaire le travail
         self.adjacency: dict[str, list[str]] = self._build_adjacency()
 
     def _build_adjacency(self) -> dict[str, list[str]]:
@@ -61,14 +59,6 @@ class Graph:
             return 2
         else:
             return 1
-
-    def _trouver_connection(self, zone_a: str, zone_b: str) -> Connection:
-        """Trouve la Connection entre deux zones, peu importe l'ordre donné."""
-        for conn in self.parsed_map.connections:
-            if (conn.zone_a == zone_a and conn.zone_b == zone_b) or (conn.zone_a == zone_b and conn.zone_b == zone_a):
-                return conn
-
-        raise ValueError(f"No connection found between {zone_a} and {zone_b}")
 
     def find_connection(self, zone_a: str, zone_b: str) -> Connection:
         """Trouve la Connection entre deux zones, peu importe l'ordre donné."""
@@ -249,12 +239,13 @@ class LinkOccupationRegistry:
         return max_capacity > nb_deja_present
 
 class Drone:
-    """Un drone individuel, capable de planifier son propre trajet."""
-
     def __init__(self, drone_id: str) -> None:
         self.drone_id = drone_id
-        # vide au départ : rempli par plan(), une fois que le drone
-        # a effectivement calculé son trajet
+        # events : liste de (tour, "ce qui s'affiche à ce tour")
+        # remplace l'ancien schedule dict{zone: tour}
+        self.events: list[tuple[int, str]] = []
+        # on garde aussi un dict {zone: tour_d_arrivee_final} pour l'occupation
+        # (savoir "à quel tour je suis VRAIMENT arrivé dans cette zone")
         self.schedule: dict[str, int] = {}
 
     def plan(
@@ -265,6 +256,7 @@ class Drone:
         link_occupation: LinkOccupationRegistry,
     ) -> None:
         schedule: dict[str, int] = {chemin[0]: 0}
+        events: list[tuple[int, str]] = []
         tour_actuel = 0
 
         for i in range(1, len(chemin)):
@@ -284,10 +276,19 @@ class Drone:
             ):
                 tour_arrivee += 1
 
+            # si le coût est de 2 tours (restricted), on ajoute un événement
+            # intermédiaire "en transit sur la connexion" au tour juste avant
+            if cout == 2:
+                nom_connexion = f"{zone_precedente}{zone_name}"
+                events.append((tour_arrivee - 1, nom_connexion))
+
+            events.append((tour_arrivee, zone_name))
+
             schedule[zone_name] = tour_arrivee
             tour_actuel = tour_arrivee
 
         self.schedule = schedule
+        self.events = events
         occupation.register(self.drone_id, schedule)
 
         zones_du_chemin = list(schedule.keys())
@@ -362,24 +363,13 @@ class Simulator:
         return self._organiser_par_tour()
 
     def _organiser_par_tour(self) -> dict[int, list[tuple[str, str]]]:
-        """
-        Transforme {drone: {zone: tour}} (organisé par drone) en
-        {tour: [(drone, zone), ...]} (organisé par tour), en ignorant le
-        tour 0 (position de départ, ce n'est pas un mouvement).
-        """
         par_tour: dict[int, list[tuple[str, str]]] = {}
 
         for drone in self.drones:
-            for zone_name, tour in drone.schedule.items():
-                if tour == 0:
-                    continue
-
-                # s'assurer que ce tour existe dans par_tour
+            for tour, destination in drone.events:
                 if tour not in par_tour:
                     par_tour[tour] = []
-
-                # ajouter le couple (drone, zone) comme UN SEUL élément (un tuple)
-                par_tour[tour].append((drone.drone_id, zone_name))
+                par_tour[tour].append((drone.drone_id, destination))
 
         return par_tour
 
@@ -403,19 +393,13 @@ class Simulator:
             # assembler tous les morceaux d'un même tour, séparés par un espace
             print(" ".join(morceaux_texte))
 
+class MapParsingError(Exception):
+    pass
+
 
 if __name__ == "__main__":
     from parser import MapParser
-
-    parsed = MapParser("maps/easy/03_basic_capacity.txt").parse()
+    parsed = MapParser("maps/test_connection_dupliquee.txt").parse()
     simulator = Simulator(parsed)
     par_tour = simulator.run()
-
-    for drone in simulator.drones:
-        print(drone.drone_id, ":", drone.schedule)
-
-    print()
-    print(par_tour)
-
-    print()
     simulator.display(par_tour)
