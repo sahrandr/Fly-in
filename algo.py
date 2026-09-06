@@ -154,7 +154,6 @@ class PathFinder:
 
         return chemin
 
-
 class OccupationRegistry:
     """
     Registre qui garde la trace de 'quel drone est où, à quel tour'.
@@ -238,6 +237,69 @@ class LinkOccupationRegistry:
 
         return max_capacity > nb_deja_present
 
+class TimeAwarePathFinder:
+    """
+    Calcule le chemin d'un drone en tenant compte du temps : explore des
+    états (tour, zone) plutôt que juste des zones, ce qui lui permet de
+    choisir un autre chemin si une zone est occupée, plutôt que d'attendre
+    bêtement.
+    """
+
+    def __init__(
+        self,
+        graph: Graph,
+        occupation: OccupationRegistry,
+        link_occupation: LinkOccupationRegistry,
+    ) -> None:
+        self.graph = graph
+        self.occupation = occupation
+        self.link_occupation = link_occupation
+
+    def find_path(self, start: str, end: str) -> None:
+        start_state = (0, start)
+        distances: dict[tuple[int, str], float] = {start_state: 0}
+        previous: dict[tuple[int, str], Optional[tuple]] = {start_state: None}
+        queue: list[tuple[int, int, str]] = [(0, 0, start)]
+
+        while queue:
+            current_cost, current_tour, current_zone = heapq.heappop(queue)
+            current_state = (current_tour, current_zone)
+
+            if current_cost > distances.get(current_state, float('inf')):
+                continue
+
+            if current_zone == end:
+                print("Arrivé !", current_state)
+                return
+
+            # ACTION 1 : attendre un tour de plus sur place
+            wait_state = (current_tour + 1, current_zone)
+            wait_cost = current_cost + 1
+            if wait_cost < distances.get(wait_state, float('inf')):
+                distances[wait_state] = wait_cost
+                previous[wait_state] = current_state
+                heapq.heappush(queue, (wait_cost, wait_state[0], wait_state[1]))
+
+            # ACTION 2 : avancer vers chaque voisin, si disponible
+            for neighbor in self.graph.adjacency[current_zone]:
+                cout = self.graph.zone_cost(neighbor)
+                arrival_tour = current_tour + cout
+                arrival_cost = current_cost + cout
+
+                max_capacite_zone = self.graph.zones[neighbor].max_drones
+                connexion = self.graph.find_connection(current_zone, neighbor)
+                max_capacite_lien = connexion.max_link_capacity
+
+                zone_disponible = self.occupation.is_available(neighbor, arrival_tour, max_capacite_zone)
+                lien_disponible = self.link_occupation.is_available(current_zone, neighbor, arrival_tour, max_capacite_lien)
+
+                if zone_disponible and lien_disponible:
+                    neighbor_state = (arrival_tour, neighbor)
+                    if arrival_cost < distances.get(neighbor_state, float('inf')):
+                        distances[neighbor_state] = arrival_cost
+                        previous[neighbor_state] = current_state
+                        heapq.heappush(queue, (arrival_cost, neighbor_state[0], neighbor_state[1]))
+
 class Drone:
     def __init__(self, drone_id: str) -> None:
         self.drone_id = drone_id
@@ -296,35 +358,6 @@ class Drone:
             link_occupation.register(
                 self.drone_id, zones_du_chemin[i - 1], zones_du_chemin[i], schedule[zones_du_chemin[i]]
             )
-
-class Simulator:
-    def __init__(self, parsed_map: ParsedMap) -> None:
-        self.parsed_map = parsed_map
-        self.graph = Graph(parsed_map.zones, parsed_map.connections)
-        self.pathfinder = PathFinder(self.graph)
-        self.occupation = OccupationRegistry()
-        self.link_occupation = LinkOccupationRegistry()
-        self.drones: list[Drone] = []
-
-    def run(self) -> dict[int, list[tuple[str, str]]]:
-        assert self.parsed_map.start_zone is not None
-        assert self.parsed_map.end_zone is not None
-
-        chemin = self.pathfinder.shortest_path(
-            self.parsed_map.start_zone, self.parsed_map.end_zone
-        )
-
-        for numero in range(1, self.parsed_map.nb_drones + 1):
-            drone = Drone(f"D{numero}")
-            drone.plan(
-                chemin,
-                self.graph,
-                self.occupation,
-                self.link_occupation
-            )
-            self.drones.append(drone)
-
-        return self._organiser_par_tour()
 
 class Simulator:
     """Orchestre le parsing, le pathfinding et la planification de tous les drones."""
@@ -396,10 +429,14 @@ class Simulator:
 class MapParsingError(Exception):
     pass
 
-
 if __name__ == "__main__":
+
     from parser import MapParser
-    parsed = MapParser("maps/test_connection_dupliquee.txt").parse()
-    simulator = Simulator(parsed)
-    par_tour = simulator.run()
-    simulator.display(par_tour)
+
+    parsed = MapParser("maps/easy/01_linear_path.txt").parse()
+    graph = Graph(parsed.zones, parsed.connections)
+    occupation = OccupationRegistry()
+    link_occupation = LinkOccupationRegistry()
+
+    finder = TimeAwarePathFinder(graph, occupation, link_occupation)
+    finder.find_path(parsed.start_zone, parsed.end_zone)
