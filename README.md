@@ -292,3 +292,5 @@ fichier .txt
 - [ ] Vérifier le code avec `flake8` et `mypy --strict` (Chapitre III.1, V)
 - [ ] Écrire le vrai `README.md` du projet, au format imposé par le sujet (Chapitre VIII : première ligne italique avec login 42, sections Description/Instructions/Resources obligatoires)
 - [ ] Décider si la visualisation finale reste sur pygame (déjà fonctionnelle et complète) ou si l'exploration raylib est poussée jusqu'à remplacer pygame dans le rendu final
+
+Installation pip install raylib puis python3 -m pip install raylib
