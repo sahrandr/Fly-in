@@ -482,7 +482,7 @@ class Simulator:
 if __name__ == "__main__":
     from parser import MapParser
 
-    parsed = MapParser("maps/test_blocked.txt").parse()
+    parsed = MapParser("maps/challenger/01_the_impossible_dream.txt").parse()
     simulator = Simulator(parsed)
     par_tour = simulator.run()
 

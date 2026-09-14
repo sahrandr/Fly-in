@@ -1,7 +1,5 @@
 from typing import Optional
 
-print("HELP")
-
 class MapParsingError(Exception):
     """Levée quand le fichier de carte contient une erreur de syntaxe ou de contenu."""
     pass
@@ -211,9 +209,9 @@ class MapParser:
         return int(reste)
 
 if __name__ == "__main__":
+    from parser import MapParser, MapParsingError
+
     try:
-        parsed = MapParser("maps/test_blocked.txt").parse()
-        print("Carte valide !")
-        print(parsed)
+        parsed = MapParser("maps/test_connection_dupliquee.txt").parse()
     except MapParsingError as e:
-        print("Erreur détectée :", e)
+        print("Erreur détectée:", e)
