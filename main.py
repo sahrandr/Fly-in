@@ -98,14 +98,6 @@ def draw_dragon_frame(texture, frame_index, x, y, scale, tint):
     dest = Rectangle(x - w / 2, y - h, w, h)
     draw_texture_pro(texture, source, dest, Vector2(0, 0), 0.0, tint)
 
-def parse_connection(conn):
-    if isinstance(conn, (tuple, list)) and len(conn) >= 2: return conn[0], conn[1]
-    u = getattr(conn, 'u', getattr(conn, 'from_zone', getattr(conn, 'zone1', getattr(conn, 'source', getattr(conn, 'a', None)))))
-    v = getattr(conn, 'v', getattr(conn, 'to_zone', getattr(conn, 'zone2', getattr(conn, 'target', getattr(conn, 'b', None)))))
-    if u and hasattr(u, 'name'): u = u.name
-    if v and hasattr(v, 'name'): v = v.name
-    return u, v
-
 # 5. DÉPART ET ARRIVÉE
 start_zone_id = getattr(parsed, 'start_zone', None)
 end_zone_id = getattr(parsed, 'end_zone', getattr(parsed, 'target_zone', None))
@@ -141,13 +133,25 @@ for x in range(min_x, max_x + 1):
     for y in range(min_y, max_y + 1):
         terrain_map[(x, y)] = Color(25, 30, 40, 255) if (x + y) % 2 == 0 else Color(30, 35, 45, 255)
 
+# Extraction robuste des connexions (gère graph ou connections)
 connections = []
 if hasattr(parsed, 'graph') and parsed.graph:
     for u, neighbors in parsed.graph.items():
+        u_name = u.name if hasattr(u, 'name') else str(u)
         for v in neighbors:
-            connections.append((u, v))
+            v_name = v.name if hasattr(v, 'name') else str(v)
+            connections.append((u_name, v_name))
 elif hasattr(parsed, 'connections') and parsed.connections:
-    connections = parsed.connections
+    for conn in parsed.connections:
+        if isinstance(conn, (tuple, list)) and len(conn) >= 2:
+            connections.append((str(conn[0]), str(conn[1])))
+        else:
+            u = getattr(conn, 'u', getattr(conn, 'from_zone', getattr(conn, 'zone1', getattr(conn, 'source', getattr(conn, 'a', None)))))
+            v = getattr(conn, 'v', getattr(conn, 'to_zone', getattr(conn, 'zone2', getattr(conn, 'target', getattr(conn, 'b', None)))))
+            if u is not None and v is not None:
+                u_name = u.name if hasattr(u, 'name') else str(u)
+                v_name = v.name if hasattr(v, 'name') else str(v)
+                connections.append((u_name, v_name))
 
 # 7. ZOOM ET CENTRAGE
 castle_iso_raw = [map_to_iso_raw(z.x * FACTOR, z.y * FACTOR) for z in parsed.zones.values()]
@@ -244,18 +248,17 @@ while not window_should_close():
         iso_x, iso_y = map_to_iso(gx, gy)
         draw_iso_tile_flat(iso_x + OFFSET_X, iso_y + OFFSET_Y, TILE_WIDTH, TILE_HEIGHT, tile_color, grid_line)
 
-    # --- B. PONTS SUSPENDUS / LIGNES DE CHEMIN ---
-    for conn in connections:
-        u, v = parse_connection(conn)
+    # --- B. LIGNES / PONTS ENTRE LES ZONES ---
+    for u, v in connections:
         p1 = get_zone_pos(u)
         p2 = get_zone_pos(v)
         if p1 and p2:
             start_pos = Vector2(p1[0], p1[1] - BLOCK_DEPTH)
             end_pos = Vector2(p2[0], p2[1] - BLOCK_DEPTH)
             
-            # Ligne néon brillante reliant les sommets des piliers
-            draw_line_ex(start_pos, end_pos, 6.0 * ZOOM, Color(80, 200, 255, 110))
-            draw_line_ex(start_pos, end_pos, 2.0 * ZOOM, Color(220, 245, 255, 240))
+            # Ligne néon brillante pour relier les chemins
+            draw_line_ex(start_pos, end_pos, 8.0 * ZOOM, Color(80, 200, 255, 120))
+            draw_line_ex(start_pos, end_pos, 2.5 * ZOOM, Color(220, 245, 255, 255))
 
     # --- C. PILIERS ET CHÂTEAUX ---
     sorted_zones = sorted(parsed.zones.items(), key=lambda item: item[1].x * FACTOR + item[1].y * FACTOR)
@@ -272,7 +275,7 @@ while not window_should_close():
             tint = COLOR_MAP.get(zone.color, COLOR_MAP["none"])
             draw_texture_centered(chateau_texture, px, py - BLOCK_DEPTH + (5*ZOOM), CHATEAU_SCALE, tint)
 
-    # --- D. DRAGONS (VOL ABAISSÉ) ---
+    # --- D. DRAGONS (BIEN PLUS BAS) ---
     bobbing_y = math.sin(get_time() * 5.0) * (4.0 * ZOOM)
     
     dragons_to_draw = []
@@ -299,8 +302,8 @@ while not window_should_close():
             dragon_texture,
             current_frame,
             curr_x + decalage_x,
-            # Altitude réduite: (12.0 * ZOOM) au lieu de (35.0 * ZOOM)
-            curr_y - BLOCK_DEPTH - (12.0 * ZOOM) + bobbing_y + decalage_y,
+            # Hauteur abaissée au plus près des piliers avec un décalage positif de +18.0
+            curr_y - BLOCK_DEPTH + (18.0 * ZOOM) + bobbing_y + decalage_y,
             DRAGON_SCALE,
             couleur_pour_drone(drone_id)
         )
