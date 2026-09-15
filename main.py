@@ -1,11 +1,10 @@
 import math
-import random
 from pyray import *
 from parser import MapParser
 from algo import Simulator
 
 # 1. PARSING ET SIMULATION
-parsed = MapParser("maps/easy/03_basic_capacity.txt").parse()
+parsed = MapParser("maps/hard/01_maze_nightmare.txt").parse()
 simulator = Simulator(parsed)
 par_tour = simulator.run()
 
@@ -153,6 +152,9 @@ elif hasattr(parsed, 'connections') and parsed.connections:
                 v_name = v.name if hasattr(v, 'name') else str(v)
                 connections.append((u_name, v_name))
 
+# 7. EXTRACTION DES CONNEXIONS
+connections = [(conn.zone_a, conn.zone_b) for conn in parsed.connections]
+
 # 7. ZOOM ET CENTRAGE
 castle_iso_raw = [map_to_iso_raw(z.x * FACTOR, z.y * FACTOR) for z in parsed.zones.values()]
 c_xs = [p[0] for p in castle_iso_raw]
@@ -190,11 +192,15 @@ for key, zone in parsed.zones.items():
         zone_positions[str(zone.name)] = pos
 
 def get_zone_pos(zone_ref):
-    if zone_ref in zone_positions: return zone_positions[zone_ref]
+    if zone_ref in zone_positions:
+        return zone_positions[zone_ref]
     s_ref = str(zone_ref)
-    if s_ref in zone_positions: return zone_positions[s_ref]
+    if s_ref in zone_positions:
+        return zone_positions[s_ref]
     for k, pos in zone_positions.items():
-        if str(k) == s_ref: return pos
+        if str(k) == s_ref:
+            return pos
+    print(f"[DEBUG] Échec résolution position pour: {zone_ref!r}")
     return None
 
 # 8. DRAGONS
@@ -248,19 +254,7 @@ while not window_should_close():
         iso_x, iso_y = map_to_iso(gx, gy)
         draw_iso_tile_flat(iso_x + OFFSET_X, iso_y + OFFSET_Y, TILE_WIDTH, TILE_HEIGHT, tile_color, grid_line)
 
-    # --- B. LIGNES / PONTS ENTRE LES ZONES ---
-    for u, v in connections:
-        p1 = get_zone_pos(u)
-        p2 = get_zone_pos(v)
-        if p1 and p2:
-            start_pos = Vector2(p1[0], p1[1] - BLOCK_DEPTH)
-            end_pos = Vector2(p2[0], p2[1] - BLOCK_DEPTH)
-            
-            # Ligne néon brillante pour relier les chemins
-            draw_line_ex(start_pos, end_pos, 8.0 * ZOOM, Color(80, 200, 255, 120))
-            draw_line_ex(start_pos, end_pos, 2.5 * ZOOM, Color(220, 245, 255, 255))
-
-    # --- C. PILIERS ET CHÂTEAUX ---
+        # --- B. PILIERS ET CHÂTEAUX (dessinés en premier) ---
     sorted_zones = sorted(parsed.zones.items(), key=lambda item: item[1].x * FACTOR + item[1].y * FACTOR)
 
     for name, zone in sorted_zones:
@@ -275,6 +269,31 @@ while not window_should_close():
             tint = COLOR_MAP.get(zone.color, COLOR_MAP["none"])
             draw_texture_centered(chateau_texture, px, py - BLOCK_DEPTH + (5*ZOOM), CHATEAU_SCALE, tint)
 
+    # --- C. LIGNES / PONTS ENTRE LES ZONES (dans l'espace, entre les cubes) ---
+    MID_HEIGHT = BLOCK_DEPTH * 0.5
+    GAP_MARGIN = TILE_WIDTH * 0.35
+
+    for u, v in connections:
+        p1 = get_zone_pos(u)
+        p2 = get_zone_pos(v)
+        if p1 and p2:
+            x1, y1 = p1[0], p1[1] - MID_HEIGHT
+            x2, y2 = p2[0], p2[1] - MID_HEIGHT
+
+            dx = x2 - x1
+            dy = y2 - y1
+            dist = math.hypot(dx, dy)
+
+            if dist > GAP_MARGIN * 2:
+                ux, uy = dx / dist, dy / dist
+                start_pos = Vector2(x1 + ux * GAP_MARGIN, y1 + uy * GAP_MARGIN)
+                end_pos = Vector2(x2 - ux * GAP_MARGIN, y2 - uy * GAP_MARGIN)
+
+                draw_line_ex(start_pos, end_pos, 6.0 * ZOOM, Color(80, 200, 255, 90))
+                draw_line_ex(start_pos, end_pos, 2.0 * ZOOM, Color(220, 245, 255, 230))
+
+                draw_circle_v(start_pos, 3.0 * ZOOM, Color(220, 245, 255, 255))
+                draw_circle_v(end_pos, 3.0 * ZOOM, Color(220, 245, 255, 255))
     # --- D. DRAGONS (BIEN PLUS BAS) ---
     bobbing_y = math.sin(get_time() * 5.0) * (4.0 * ZOOM)
     
@@ -333,3 +352,7 @@ while not window_should_close():
 unload_texture(chateau_texture)
 unload_texture(dragon_texture)
 close_window()
+
+# print(f"[DEBUG] {len(connections)} connexions extraites")
+# print(f"[DEBUG] Exemple: {connections[:5]}")
+# print(f"[DEBUG] Clés zone_positions dispo (5 premières): {list(zone_positions.keys())[:5]}")
