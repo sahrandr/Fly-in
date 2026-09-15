@@ -192,84 +192,154 @@ class LinkOccupationRegistry:
         return max_capacity > nb_deja_present
 
 
+# class TimeAwarePathFinder:
+#     """
+#     Calcule le chemin d'UN drone en tenant compte du TEMPS : contrairement à
+#     PathFinder (qui calcule toujours le même chemin, peu importe qui est déjà
+#     passé par où), celui-ci explore des états (tour, zone) plutôt que juste
+#     des zones. Comme il connaît l'occupation déjà réservée par les drones
+#     précédents, il peut choisir un autre chemin pour éviter une zone
+#     occupée à un tour donné, plutôt que d'attendre bêtement sur place.
+#     """
+
+#     MAX_TOUR = 200  # garde-fou : évite une boucle infinie si aucun chemin n'existe
+
+#     def __init__(
+#         self,
+#         graph: Graph,
+#         occupation: OccupationRegistry,
+#         link_occupation: LinkOccupationRegistry,
+#     ) -> None:
+#         self.graph = graph
+#         self.occupation = occupation
+#         self.link_occupation = link_occupation
+
+#     def find_path(self, start: str, end: str) -> tuple[dict[str, int], list[tuple[int, str]]]:
+#         """
+#         Calcule le chemin d'un drone de start à end, en tenant compte de
+#         l'occupation déjà réservée par les drones précédents.
+
+#         Retourne (schedule, events) :
+#         - schedule : {zone: tour_d_arrivee} -> pour enregistrer dans les registres
+#         - events   : [(tour, "ce qui s'affiche")] -> pour le format de sortie final
+#         """
+#         start_state = (0, start)
+
+#         # distances/previous commencent VIDES (pas remplis pour toutes les
+#         # zones dès le départ comme dans PathFinder) car on ne connaît pas
+#         # à l'avance tous les états (tour, zone) possibles -> on ne remplit
+#         # que ceux qu'on découvre réellement au fil de l'exploration
+#         distances: dict[tuple[int, str], float] = {start_state: 0}
+#         previous: dict[tuple[int, str], Optional[tuple]] = {start_state: None}
+
+#         # chaque élément de la queue : (cout, tour, zone) - séparés plutôt
+#         # que groupés en (cout, (tour, zone)) car heapq compare plus
+#         # simplement des tuples "plats"
+#         queue: list[tuple[float, int, str]] = [(0, 0, start)]
+
+#         while queue:
+#             current_cost, current_tour, current_zone = heapq.heappop(queue)
+#             current_state = (current_tour, current_zone)
+
+#             # entrée obsolète (un meilleur chemin vers cet état a déjà été
+#             # trouvé entre-temps) -> on l'ignore, exactement comme dans
+#             # le Dijkstra classique de PathFinder
+#             if current_cost > distances.get(current_state, float('inf')):
+#                 continue
+
+#             # arrivé à destination : on reconstruit le chemin complet
+#             if current_zone == end:
+#                 return self._reconstruct(previous, current_state)
+
+#             if current_tour >= self.MAX_TOUR:
+#                 continue
+
+#             # ACTION 1 : attendre un tour de plus sur place. Toujours
+#             # possible (coût 1), c'est l'option de secours qui garantit
+#             # que le drone ne reste jamais totalement bloqué face à une
+#             # zone/connexion momentanément occupée
+#             wait_state = (current_tour + 1, current_zone)
+#             wait_cost = current_cost + 1
+#             if wait_cost < distances.get(wait_state, float('inf')):
+#                 distances[wait_state] = wait_cost
+#                 previous[wait_state] = current_state
+#                 heapq.heappush(queue, (wait_cost, wait_state[0], wait_state[1]))
+
+#             # ACTION 2 : essayer d'avancer vers chaque voisin direct.
+#             # Contrairement à PathFinder, on vérifie ICI si la zone ET la
+#             # connexion sont disponibles à ce tour précis -> c'est ce qui
+#             # permet à Dijkstra de "voir" qu'un autre chemin est parfois
+#             # plus rapide que d'attendre sur celui-ci
+#             for neighbor in self.graph.adjacency[current_zone]:
+#                 cout = self.graph.zone_cost(neighbor)
+#                 arrival_tour = current_tour + cout
+#                 arrival_cost = current_cost + cout
+
+#                 max_capacite_zone = self.graph.zones[neighbor].max_drones
+#                 connexion = self.graph.find_connection(current_zone, neighbor)
+#                 max_capacite_lien = connexion.max_link_capacity
+
+#                 zone_disponible = self.occupation.is_available(
+#                     neighbor, arrival_tour, max_capacite_zone
+#                 )
+#                 lien_disponible = self.link_occupation.is_available(
+#                     current_zone, neighbor, arrival_tour, max_capacite_lien
+#                 )
+
+#                 # on ne considère cet état comme atteignable QUE si les
+#                 # deux capacités (zone ET connexion) le permettent à ce tour
+#                 if zone_disponible and lien_disponible:
+#                     neighbor_state = (arrival_tour, neighbor)
+#                     if arrival_cost < distances.get(neighbor_state, float('inf')):
+#                         distances[neighbor_state] = arrival_cost
+#                         previous[neighbor_state] = current_state
+#                         heapq.heappush(
+#                             queue, (arrival_cost, neighbor_state[0], neighbor_state[1])
+#                         )
+
+#         # la queue s'est vidée sans jamais atteindre "end" -> aucun chemin
+#         # disponible (carte impossible, ou capacités trop restrictives)
+#         raise ValueError(f"No available path found from {start} to {end}")
+
+import itertools
+
 class TimeAwarePathFinder:
-    """
-    Calcule le chemin d'UN drone en tenant compte du TEMPS : contrairement à
-    PathFinder (qui calcule toujours le même chemin, peu importe qui est déjà
-    passé par où), celui-ci explore des états (tour, zone) plutôt que juste
-    des zones. Comme il connaît l'occupation déjà réservée par les drones
-    précédents, il peut choisir un autre chemin pour éviter une zone
-    occupée à un tour donné, plutôt que d'attendre bêtement sur place.
-    """
+    MAX_TOUR = 200
 
-    MAX_TOUR = 200  # garde-fou : évite une boucle infinie si aucun chemin n'existe
-
-    def __init__(
-        self,
-        graph: Graph,
-        occupation: OccupationRegistry,
-        link_occupation: LinkOccupationRegistry,
-    ) -> None:
+    def __init__(self, graph, occupation, link_occupation):
         self.graph = graph
         self.occupation = occupation
         self.link_occupation = link_occupation
+        self._counter = itertools.count()  # tie-breaker neutre
 
-    def find_path(self, start: str, end: str) -> tuple[dict[str, int], list[tuple[int, str]]]:
-        """
-        Calcule le chemin d'un drone de start à end, en tenant compte de
-        l'occupation déjà réservée par les drones précédents.
-
-        Retourne (schedule, events) :
-        - schedule : {zone: tour_d_arrivee} -> pour enregistrer dans les registres
-        - events   : [(tour, "ce qui s'affiche")] -> pour le format de sortie final
-        """
+    def find_path(self, start, end):
         start_state = (0, start)
+        distances = {start_state: 0}
+        previous = {start_state: None}
 
-        # distances/previous commencent VIDES (pas remplis pour toutes les
-        # zones dès le départ comme dans PathFinder) car on ne connaît pas
-        # à l'avance tous les états (tour, zone) possibles -> on ne remplit
-        # que ceux qu'on découvre réellement au fil de l'exploration
-        distances: dict[tuple[int, str], float] = {start_state: 0}
-        previous: dict[tuple[int, str], Optional[tuple]] = {start_state: None}
-
-        # chaque élément de la queue : (cout, tour, zone) - séparés plutôt
-        # que groupés en (cout, (tour, zone)) car heapq compare plus
-        # simplement des tuples "plats"
-        queue: list[tuple[float, int, str]] = [(0, 0, start)]
+        # (cost, compteur, tour, zone) au lieu de (cost, tour, zone)
+        queue = [(0, next(self._counter), 0, start)]
 
         while queue:
-            current_cost, current_tour, current_zone = heapq.heappop(queue)
+            current_cost, _, current_tour, current_zone = heapq.heappop(queue)
             current_state = (current_tour, current_zone)
 
-            # entrée obsolète (un meilleur chemin vers cet état a déjà été
-            # trouvé entre-temps) -> on l'ignore, exactement comme dans
-            # le Dijkstra classique de PathFinder
             if current_cost > distances.get(current_state, float('inf')):
                 continue
 
-            # arrivé à destination : on reconstruit le chemin complet
             if current_zone == end:
                 return self._reconstruct(previous, current_state)
 
             if current_tour >= self.MAX_TOUR:
                 continue
 
-            # ACTION 1 : attendre un tour de plus sur place. Toujours
-            # possible (coût 1), c'est l'option de secours qui garantit
-            # que le drone ne reste jamais totalement bloqué face à une
-            # zone/connexion momentanément occupée
             wait_state = (current_tour + 1, current_zone)
             wait_cost = current_cost + 1
             if wait_cost < distances.get(wait_state, float('inf')):
                 distances[wait_state] = wait_cost
                 previous[wait_state] = current_state
-                heapq.heappush(queue, (wait_cost, wait_state[0], wait_state[1]))
+                heapq.heappush(queue, (wait_cost, next(self._counter), wait_state[0], wait_state[1]))
 
-            # ACTION 2 : essayer d'avancer vers chaque voisin direct.
-            # Contrairement à PathFinder, on vérifie ICI si la zone ET la
-            # connexion sont disponibles à ce tour précis -> c'est ce qui
-            # permet à Dijkstra de "voir" qu'un autre chemin est parfois
-            # plus rapide que d'attendre sur celui-ci
             for neighbor in self.graph.adjacency[current_zone]:
                 cout = self.graph.zone_cost(neighbor)
                 arrival_tour = current_tour + cout
@@ -279,26 +349,16 @@ class TimeAwarePathFinder:
                 connexion = self.graph.find_connection(current_zone, neighbor)
                 max_capacite_lien = connexion.max_link_capacity
 
-                zone_disponible = self.occupation.is_available(
-                    neighbor, arrival_tour, max_capacite_zone
-                )
-                lien_disponible = self.link_occupation.is_available(
-                    current_zone, neighbor, arrival_tour, max_capacite_lien
-                )
+                zone_disponible = self.occupation.is_available(neighbor, arrival_tour, max_capacite_zone)
+                lien_disponible = self.link_occupation.is_available(current_zone, neighbor, arrival_tour, max_capacite_lien)
 
-                # on ne considère cet état comme atteignable QUE si les
-                # deux capacités (zone ET connexion) le permettent à ce tour
                 if zone_disponible and lien_disponible:
                     neighbor_state = (arrival_tour, neighbor)
                     if arrival_cost < distances.get(neighbor_state, float('inf')):
                         distances[neighbor_state] = arrival_cost
                         previous[neighbor_state] = current_state
-                        heapq.heappush(
-                            queue, (arrival_cost, neighbor_state[0], neighbor_state[1])
-                        )
+                        heapq.heappush(queue, (arrival_cost, next(self._counter), neighbor_state[0], neighbor_state[1]))
 
-        # la queue s'est vidée sans jamais atteindre "end" -> aucun chemin
-        # disponible (carte impossible, ou capacités trop restrictives)
         raise ValueError(f"No available path found from {start} to {end}")
 
     def _reconstruct(
@@ -482,12 +542,19 @@ class Simulator:
 if __name__ == "__main__":
     from parser import MapParser
 
-    parsed = MapParser("maps/challenger/01_the_impossible_dream.txt").parse()
+    # parsed = MapParser("maps/challenger/01_the_impossible_dream.txt").parse()
+    # simulator = Simulator(parsed)
+    # par_tour = simulator.run()
+
+    # for drone in simulator.drones:
+    #     print(drone.drone_id, ":", drone.schedule)
+
+    # print()
+    # simulator.display(par_tour)
+
+    parsed = MapParser("maps/easy/02_simple_fork.txt").parse()
     simulator = Simulator(parsed)
     par_tour = simulator.run()
 
     for drone in simulator.drones:
         print(drone.drone_id, ":", drone.schedule)
-
-    print()
-    simulator.display(par_tour)

@@ -4,7 +4,7 @@ from parser import MapParser
 from algo import Simulator
 
 # 1. PARSING ET SIMULATION
-parsed = MapParser("maps/hard/01_maze_nightmare.txt").parse()
+parsed = MapParser("maps/easy/02_simple_fork.txt").parse()
 simulator = Simulator(parsed)
 par_tour = simulator.run()
 
