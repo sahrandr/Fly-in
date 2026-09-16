@@ -1,7 +1,6 @@
 from typing import Optional
 
 class MapParsingError(Exception):
-    """Levée quand le fichier de carte contient une erreur de syntaxe ou de contenu."""
     pass
 
 class Zone:
@@ -28,8 +27,6 @@ class Connection:
 
 
 class ParsedMap:
-    """Regroupe le résultat complet du parsing d'un fichier de carte."""
-
     def __init__(self) -> None:
         self.nb_drones: int = 0
         self.start_zone: Optional[str] = None
@@ -46,12 +43,6 @@ class ParsedMap:
 
 
 class MapParser:
-    """Transforme un fichier .txt de carte en objet ParsedMap.
-
-    Usage:
-        parsed = MapParser("maps/easy/03_basic_capacity.txt").parse()
-    """
-
     def __init__(self, filepath: str) -> None:
         self.filepath = filepath
 
@@ -67,7 +58,6 @@ class MapParser:
             )
 
     def _valider_capacite(self, valeur_str: str, nom_champ: str, numero_ligne: int) -> int:
-        """Vérifie qu'une chaîne représente bien un entier positif, et la convertit."""
         if not valeur_str.isdigit():
             raise MapParsingError(
                 f"Line {numero_ligne}: {nom_champ} must be a positive integer, got '{valeur_str}'"
@@ -83,7 +73,6 @@ class MapParser:
         return valeur
 
     def _parse_line(self, ligne: str, result: ParsedMap, numero_ligne: int) -> None:
-        """Identifie le type de la ligne et met à jour le ParsedMap en conséquence."""
         if ligne.startswith("nb_drones:"):
             reste = ligne.split(":", 1)[1].strip()
             result.nb_drones = self._valider_capacite(reste, "nb_drones", numero_ligne)
@@ -151,7 +140,6 @@ class MapParser:
             raise MapParsingError(f"Line {numero_ligne}: unrecognized line format: '{ligne}'")
 
     def parse(self) -> ParsedMap:
-        # crée un ParsedMap vide, à remplir au fur et à mesure du parsing
         result = ParsedMap()
 
         with open(self.filepath, "r") as f:
@@ -167,7 +155,6 @@ class MapParser:
 
     @staticmethod
     def _extract_name_x_y(ligne: str) -> tuple[str, int, int]:
-        """Extrait le nom, x, y d'une ligne hub:/start_hub:/end_hub:"""
         reste = ligne.split(":", 1)[1].strip()
         if "[" in reste:
             part_principal = reste.split("[")[0].strip()
@@ -182,7 +169,6 @@ class MapParser:
 
     @staticmethod
     def _extract_metadata(ligne: str) -> dict[str, str]:
-        """Extrait le contenu entre [ ] et le transforme en dict."""
         if "[" not in ligne:
             return {}
         interieur = ligne.split("[")[1].replace("]", "")
@@ -195,7 +181,6 @@ class MapParser:
 
     @staticmethod
     def _extract_connection(ligne: str) -> tuple[str, str]:
-        """'connection: start-junction' -> ('start', 'junction')"""
         reste = ligne.split(":", 1)[1].strip()
         if "[" in reste:
             reste = reste.split("[")[0].strip()
@@ -204,7 +189,6 @@ class MapParser:
 
     @staticmethod
     def _extract_nb_drones(ligne: str) -> int:
-        """'nb_drones: 3' -> 3"""
         reste = ligne.split(":", 1)[1].strip()
         return int(reste)
 
@@ -212,6 +196,6 @@ if __name__ == "__main__":
     from parser import MapParser, MapParsingError
 
     try:
-        parsed = MapParser("maps/test_connection_dupliquee.txt").parse()
+        parsed = MapParser("maps/easy/01_linear_path.txt").parse()
     except MapParsingError as e:
         print("Erreur détectée:", e)
