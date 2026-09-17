@@ -4,141 +4,90 @@ from pyray import *
 from parser import MapParser
 from algo import Simulator
 
-#  1. PARSING ET SIMULATION
+# ============================================================
+#  1. SIMULATION
+# ============================================================
 parsed = MapParser("maps/hard/03_ultimate_challenge.txt").parse()
 simulator = Simulator(parsed)
 par_tour = simulator.run()
 
-FACTOR = 2
 SCREEN_W, SCREEN_H = 1200, 800
+PAD_X, PAD_Y = 110, 90
 
 init_window(SCREEN_W, SCREEN_H, "Fly-in")
 set_target_fps(60)
 
-chateau_texture = load_texture("assets/chateau.png")
-dragon_texture = load_texture("assets/dragon.png")
+# ============================================================
+#  2. PALETTE — 4 roles
+# ============================================================
+C_BG = Color(8, 10, 15, 255)
+C_GRID = Color(255, 255, 255, 6)
 
-DRAGON_FRAME_SIZE = 180.0
-DRAGON_COLS, DRAGON_ROWS = 4, 2
-DRAGON_TOTAL_FRAMES = DRAGON_COLS * DRAGON_ROWS
-DRAGON_ANIM_SPEED = 8
-
-CHATEAU_SCALE_BASE = 0.35
-DRAGON_SCALE_BASE = 0.45
-TILE_WIDTH_BASE = 80.0
-TILE_HEIGHT_BASE = 40.0
-
-#  2. PALETTE — 4 roles, pas 9 teintes
-# Le principe: la couleur encode le ROLE, pas l'index du noeud.
-C_BG = Color(9, 11, 16, 255)
-C_TILE_A = Color(18, 21, 28, 255)
-C_TILE_B = Color(21, 25, 33, 255)
-C_GRID = Color(255, 255, 255, 8)
-
-C_STRUCT = Color(52, 60, 76, 255)      # noeud hors chemin: neutre, il recule
-C_PATH = Color(90, 222, 204, 255)      # noeud sur un chemin emprunte: accent
-C_DEAD = Color(150, 58, 58, 255)       # piege / cul-de-sac: rouge sourd
+C_STRUCT = Color(64, 74, 92, 255)
+C_PATH = Color(90, 222, 204, 255)
+C_DEAD = Color(158, 62, 62, 255)
 C_START = Color(96, 230, 130, 255)
-C_GOAL = Color(255, 200, 70, 255)
+C_GOAL = Color(255, 198, 70, 255)
 
-C_EDGE_IDLE = Color(80, 96, 120, 60)
-C_EDGE_HOT = Color(90, 222, 204, 110)
-C_EDGE_CORE = Color(200, 255, 248, 200)
+C_EDGE_IDLE = Color(92, 106, 130, 46)
+C_EDGE_HOT = Color(90, 222, 204, 70)
 
-DRAGON_COLORS = [
-    Color(255, 140, 120, 255), Color(140, 235, 200, 255),
-    Color(150, 190, 255, 255), Color(255, 214, 130, 255),
-    Color(230, 150, 235, 255), Color(150, 235, 235, 255),
+ORB_COLORS = [
+    Color(255, 150, 120, 255), Color(140, 235, 205, 255),
+    Color(155, 190, 255, 255), Color(255, 214, 130, 255),
+    Color(232, 152, 238, 255), Color(150, 238, 238, 255),
 ]
 
 
-def couleur_pour_drone(drone_id):
-    return DRAGON_COLORS[(int(drone_id[1:]) - 1) % len(DRAGON_COLORS)]
+def orb_color(drone_id):
+    return ORB_COLORS[(int(drone_id[1:]) - 1) % len(ORB_COLORS)]
 
 
-def shade(c, k, alpha=None):
-    return Color(
-        max(0, min(255, int(c.r * k))),
-        max(0, min(255, int(c.g * k))),
-        max(0, min(255, int(c.b * k))),
-        c.a if alpha is None else alpha,
-    )
+def with_alpha(c, a):
+    return Color(c.r, c.g, c.b, max(0, min(255, int(a))))
 
 
-#  3. GEOMETRIE ISOMETRIQUE
-def map_to_iso_raw(x, y):
-    return (x - y) * (TILE_WIDTH_BASE / 2), (x + y) * (TILE_HEIGHT_BASE / 2)
+def shade(c, k):
+    return Color(min(255, int(c.r * k)), min(255, int(c.g * k)),
+                 min(255, int(c.b * k)), c.a)
 
 
-def draw_iso_tile_flat(sx, sy, tw, th, color, outline=None):
-    hw, hh = tw / 2, th / 2
-    top = Vector2(sx, sy - hh)
-    right = Vector2(sx + hw, sy)
-    bottom = Vector2(sx, sy + hh)
-    left = Vector2(sx - hw, sy)
-    draw_triangle(top, left, bottom, color)
-    draw_triangle(top, bottom, right, color)
-    if outline:
-        draw_line_v(top, right, outline)
-        draw_line_v(right, bottom, outline)
-        draw_line_v(bottom, left, outline)
-        draw_line_v(left, top, outline)
+# ============================================================
+#  3. HELPERS DE RENDU
+# ============================================================
+def glow_dot(x, y, radius, color, layers=4, power=52):
+    """Bille lumineuse: halos additifs concentriques + coeur blanc."""
+    begin_blend_mode(BlendMode.BLEND_ADDITIVE)
+    for i in range(layers, 0, -1):
+        k = i / layers
+        draw_circle_v(Vector2(x, y), radius * (1 + k * 3.4),
+                      with_alpha(color, power * (1 - k) ** 1.6))
+    end_blend_mode()
+    draw_circle_v(Vector2(x, y), radius, color)
+    draw_circle_v(Vector2(x - radius * 0.22, y - radius * 0.22),
+                  radius * 0.42, Color(255, 255, 255, 210))
 
 
-def draw_iso_pillar(sx, sy, tw, th, depth, base_color, glow=0.0):
-    """glow: 0..1 — halo au moment ou un dragon arrive sur le noeud."""
-    hw, hh = tw / 2, th / 2
-
-    if glow > 0.01:
-        for i, k in enumerate((2.2, 1.7, 1.3)):
-            a = int(70 * glow / (i + 1))
-            draw_iso_tile_flat(sx, sy, tw * k, th * k, shade(base_color, 1.0, a))
-
-    top = Vector2(sx, sy - hh - depth)
-    right = Vector2(sx + hw, sy - depth)
-    bottom = Vector2(sx, sy + hh - depth)
-    left = Vector2(sx - hw, sy - depth)
-    base_bottom = Vector2(sx, sy + hh)
-    base_left = Vector2(sx - hw, sy)
-    base_right = Vector2(sx + hw, sy)
-
-    lift = 1.0 + glow * 0.45
-    face_l = shade(base_color, 0.42 * lift)
-    face_r = shade(base_color, 0.22 * lift)
-    face_t = shade(base_color, lift)
-
-    draw_triangle(left, base_left, base_bottom, face_l)
-    draw_triangle(left, base_bottom, bottom, face_l)
-    draw_triangle(bottom, base_bottom, base_right, face_r)
-    draw_triangle(bottom, base_right, right, face_r)
-    draw_triangle(top, left, bottom, face_t)
-    draw_triangle(top, bottom, right, face_t)
-
-    draw_line_v(top, left, Color(255, 255, 255, 26))
-    draw_line_v(top, right, Color(255, 255, 255, 26))
-    draw_line_v(left, bottom, Color(0, 0, 0, 110))
-    draw_line_v(bottom, right, Color(0, 0, 0, 110))
-    draw_line_v(bottom, base_bottom, Color(0, 0, 0, 110))
+def glow_ring(x, y, radius, thick, color, alpha):
+    begin_blend_mode(BlendMode.BLEND_ADDITIVE)
+    for i in range(3):
+        draw_ring(Vector2(x, y), radius - thick / 2 - i * 2,
+                  radius + thick / 2 + i * 2, 0, 360, 48,
+                  with_alpha(color, alpha / (2 + i * 2)))
+    end_blend_mode()
+    draw_ring(Vector2(x, y), radius - thick / 2, radius + thick / 2,
+              0, 360, 48, with_alpha(color, alpha))
 
 
-def draw_texture_centered(texture, x, y, scale, tint):
-    w = texture.width * scale
-    h = texture.height * scale
-    draw_texture_ex(texture, Vector2(x - w / 2, y - h), 0.0, scale, tint)
-
-
-def draw_dragon_frame(texture, frame_index, x, y, scale, tint):
-    col = frame_index % DRAGON_COLS
-    row = frame_index // DRAGON_COLS
-    src = Rectangle(col * DRAGON_FRAME_SIZE, row * DRAGON_FRAME_SIZE,
-                    DRAGON_FRAME_SIZE, DRAGON_FRAME_SIZE)
-    w = h = DRAGON_FRAME_SIZE * scale
-    draw_texture_pro(texture, src, Rectangle(x - w / 2, y - h, w, h),
-                     Vector2(0, 0), 0.0, tint)
+def glow_line(a, b, thick, color, alpha):
+    begin_blend_mode(BlendMode.BLEND_ADDITIVE)
+    draw_line_ex(a, b, thick * 4.0, with_alpha(color, alpha * 0.18))
+    draw_line_ex(a, b, thick * 2.0, with_alpha(color, alpha * 0.35))
+    end_blend_mode()
+    draw_line_ex(a, b, thick, with_alpha(color, alpha))
 
 
 def draw_text_spaced(text, x, y, size, color, spacing=2):
-    """draw_text ne gere pas le letter-spacing: on ecrit caractere par caractere."""
     cx = x
     for ch in text:
         draw_text(ch, int(cx), int(y), size, color)
@@ -150,13 +99,15 @@ def measure_spaced(text, size, spacing=2):
     return sum(measure_text(c, size) + spacing for c in text) - spacing
 
 
-#  4. CONNEXIONS (une seule extraction, robuste)
+# ============================================================
+#  4. CONNEXIONS
+# ============================================================
 connections = []
 if getattr(parsed, "connections", None):
     for conn in parsed.connections:
         a = getattr(conn, "zone_a", None)
         b = getattr(conn, "zone_b", None)
-        if a is None or b is None and isinstance(conn, (tuple, list)) and len(conn) >= 2:
+        if (a is None or b is None) and isinstance(conn, (tuple, list)) and len(conn) >= 2:
             a, b = conn[0], conn[1]
         if a is not None and b is not None:
             connections.append((a, b))
@@ -165,26 +116,32 @@ elif getattr(parsed, "graph", None):
         for v in neighbors:
             connections.append((u, v))
 
-#  5. ROLES: quels noeuds sont reellement emprunts
-start_zone_id = getattr(parsed, "start_zone", None)
-end_zone_id = getattr(parsed, "end_zone", getattr(parsed, "target_zone", None))
-
 
 def key_of(ref):
     return str(getattr(ref, "name", ref))
 
 
-# noeuds traverses par au moins un dragon pendant la simulation
+# ============================================================
+#  5. ROLES
+# ============================================================
+start_zone_id = getattr(parsed, "start_zone", None)
+end_zone_id = getattr(parsed, "end_zone", getattr(parsed, "target_zone", None))
+
 used_nodes = {key_of(start_zone_id)}
-for tour, moves in par_tour.items():
+for _tour, moves in par_tour.items():
     for _d, dest in moves:
         used_nodes.add(key_of(dest))
 
+degree = {}
+for u, v in connections:
+    degree[key_of(u)] = degree.get(key_of(u), 0) + 1
+    degree[key_of(v)] = degree.get(key_of(v), 0) + 1
 
-def role_of(name, zone):
+
+def role_of(name):
     k = key_of(name)
     s = k.lower()
-    if k == key_of(start_zone_id) or "start" in s:
+    if k == key_of(start_zone_id) or s == "start":
         return "start"
     if k == key_of(end_zone_id) or s in ("goal", "end"):
         return "goal"
@@ -198,49 +155,21 @@ def role_of(name, zone):
 ROLE_COLOR = {"start": C_START, "goal": C_GOAL, "path": C_PATH,
               "dead": C_DEAD, "struct": C_STRUCT}
 
-#  6. ZOOM ET CENTRAGE — sol resserre (le vide mangeait l'ecran)
-all_x = [z.x * FACTOR for z in parsed.zones.values()]
-all_y = [z.y * FACTOR for z in parsed.zones.values()]
-MARGIN_TILES = 1  # etait 3: 2 rangees de damier vide en moins de chaque cote
-min_x, max_x = min(all_x) - MARGIN_TILES, max(all_x) + MARGIN_TILES
-min_y, max_y = min(all_y) - MARGIN_TILES, max(all_y) + MARGIN_TILES
-
-terrain_map = {}
-for x in range(min_x, max_x + 1):
-    for y in range(min_y, max_y + 1):
-        terrain_map[(x, y)] = C_TILE_A if (x + y) % 2 == 0 else C_TILE_B
-
-castle_iso_raw = [map_to_iso_raw(z.x * FACTOR, z.y * FACTOR) for z in parsed.zones.values()]
-c_xs = [p[0] for p in castle_iso_raw]
-c_ys = [p[1] for p in castle_iso_raw]
-width_needed = (max(c_xs) - min(c_xs)) + TILE_WIDTH_BASE * 3
-height_needed = (max(c_ys) - min(c_ys)) + TILE_HEIGHT_BASE * 5
-
-ZOOM_RAW = min((SCREEN_W - 80.0) / width_needed, (SCREEN_H - 100.0) / height_needed)
-ZOOM = max(0.55, min(1.35, ZOOM_RAW))
-
-TILE_WIDTH = TILE_WIDTH_BASE * ZOOM
-TILE_HEIGHT = TILE_HEIGHT_BASE * ZOOM
-CHATEAU_SCALE = CHATEAU_SCALE_BASE * ZOOM
-DRAGON_SCALE = DRAGON_SCALE_BASE * max(0.75, ZOOM)
-BLOCK_DEPTH = 25.0 * ZOOM
-
-
-def map_to_iso(x, y):
-    return (x - y) * (TILE_WIDTH / 2), (x + y) * (TILE_HEIGHT / 2)
-
-
-all_iso = [map_to_iso(gx, gy) for (gx, gy) in terrain_map.keys()]
-z_xs = [p[0] for p in all_iso]
-z_ys = [p[1] for p in all_iso]
-OFFSET_X = SCREEN_W / 2 - (min(z_xs) + max(z_xs)) / 2
-OFFSET_Y = SCREEN_H / 2 - (min(z_ys) + max(z_ys)) / 2
+# ============================================================
+#  6. PROJECTION 2D — les coords du parser, mises a l'echelle
+# ============================================================
+xs = [z.x for z in parsed.zones.values()]
+ys = [z.y for z in parsed.zones.values()]
+span_x = max(1e-6, max(xs) - min(xs))
+span_y = max(1e-6, max(ys) - min(ys))
+SCALE = min((SCREEN_W - 2 * PAD_X) / span_x, (SCREEN_H - 2 * PAD_Y) / span_y)
+ox = (SCREEN_W - span_x * SCALE) / 2 - min(xs) * SCALE
+oy = (SCREEN_H - span_y * SCALE) / 2 - min(ys) * SCALE
 
 zone_positions = {}
 for key, zone in parsed.zones.items():
-    px, py = map_to_iso(zone.x * FACTOR, zone.y * FACTOR)
-    pos = (px + OFFSET_X, py + OFFSET_Y)
-    for k in {key, str(key), getattr(zone, "name", None), str(getattr(zone, "name", ""))}:
+    pos = (zone.x * SCALE + ox, zone.y * SCALE + oy)
+    for k in {key, str(key), getattr(zone, "name", None)}:
         if k:
             zone_positions[k] = pos
 
@@ -251,31 +180,33 @@ def get_zone_pos(ref):
     return zone_positions.get(str(ref))
 
 
+def node_radius(name):
+    role = role_of(name)
+    if role in ("start", "goal"):
+        return 13.0
+    return 6.0 + min(degree.get(key_of(name), 1), 5) * 1.1
+
+
+# ============================================================
 #  7. ETAT
+# ============================================================
 drone_ids = [f"D{i}" for i in range(1, parsed.nb_drones + 1)]
 drone_from = {d: parsed.start_zone for d in drone_ids}
 drone_to = {d: parsed.start_zone for d in drone_ids}
-trails = {d: deque(maxlen=7) for d in drone_ids}     # traînee
-node_glow = {}                                        # name -> 0..1
+trails = {d: deque(maxlen=14) for d in drone_ids}
+pulses = []  # {x, y, t, color}
 
 tour_simulation = 0
 nombre_max_tours = max(par_tour.keys()) if par_tour else 0
-TURN_DURATION_FRAMES = 60
+TURN_DURATION_FRAMES = 48
 turn_frame_counter = 0
-anim_tick = 0
-current_frame = 0
 
-sorted_zones = sorted(parsed.zones.items(),
-                      key=lambda it: it[1].x * FACTOR + it[1].y * FACTOR)
-sorted_terrain = sorted(terrain_map.items(), key=lambda it: it[0][0] + it[0][1])
+nodes_sorted = list(parsed.zones.items())
 
+# ============================================================
 #  8. BOUCLE
+# ============================================================
 while not window_should_close():
-    anim_tick += 1
-    if anim_tick >= DRAGON_ANIM_SPEED:
-        anim_tick = 0
-        current_frame = (current_frame + 1) % DRAGON_TOTAL_FRAMES
-
     turn_frame_counter += 1
     if turn_frame_counter >= TURN_DURATION_FRAMES:
         turn_frame_counter = 0
@@ -286,132 +217,145 @@ while not window_should_close():
             if tour_simulation in par_tour:
                 for d, dest in par_tour[tour_simulation]:
                     drone_to[d] = dest
-                    node_glow[key_of(dest)] = 1.0   # declenche le halo
+                    p = get_zone_pos(dest)
+                    if p:
+                        pulses.append({"x": p[0], "y": p[1], "t": 0.0,
+                                       "c": orb_color(d)})
 
-    for k in list(node_glow):
-        node_glow[k] *= 0.94
-        if node_glow[k] < 0.01:
-            del node_glow[k]
+    for pu in pulses:
+        pu["t"] += 0.035
+    pulses = [p for p in pulses if p["t"] < 1.0]
 
     t = turn_frame_counter / TURN_DURATION_FRAMES
-    t_smooth = t * t * (3 - 2 * t)
+    ts = t * t * (3 - 2 * t)
 
     begin_drawing()
     clear_background(C_BG)
 
-    # --- A. SOL ---
-    for (gx, gy), tile_color in sorted_terrain:
-        ix, iy = map_to_iso(gx, gy)
-        draw_iso_tile_flat(ix + OFFSET_X, iy + OFFSET_Y,
-                           TILE_WIDTH, TILE_HEIGHT, tile_color, C_GRID)
+    # --- A. grille de fond, tres discrete ---
+    for gx in range(0, SCREEN_W, 40):
+        draw_line(gx, 0, gx, SCREEN_H, C_GRID)
+    for gy in range(0, SCREEN_H, 40):
+        draw_line(0, gy, SCREEN_W, gy, C_GRID)
 
-    # --- B. ARETES (sous les piliers: elles passent au sol, plus lisible) ---
-    MID_HEIGHT = BLOCK_DEPTH * 0.5
-    GAP = TILE_WIDTH * 0.35
+    # --- B. aretes ---
     for u, v in connections:
         p1, p2 = get_zone_pos(u), get_zone_pos(v)
         if not (p1 and p2):
             continue
         hot = key_of(u) in used_nodes and key_of(v) in used_nodes
-        x1, y1 = p1[0], p1[1] - MID_HEIGHT
-        x2, y2 = p2[0], p2[1] - MID_HEIGHT
-        dx, dy = x2 - x1, y2 - y1
+        ax, ay, bx, by = p1[0], p1[1], p2[0], p2[1]
+        dx, dy = bx - ax, by - ay
         dist = math.hypot(dx, dy)
-        if dist <= GAP * 2:
+        if dist < 1:
             continue
         ux, uy = dx / dist, dy / dist
-        a = Vector2(x1 + ux * GAP, y1 + uy * GAP)
-        b = Vector2(x2 - ux * GAP, y2 - uy * GAP)
+        ra, rb = node_radius(u) + 3, node_radius(v) + 3
+        a = Vector2(ax + ux * ra, ay + uy * ra)
+        b = Vector2(bx - ux * rb, by - uy * rb)
         if hot:
-            draw_line_ex(a, b, 7.0 * ZOOM, C_EDGE_HOT)
-            draw_line_ex(a, b, 1.6 * ZOOM, C_EDGE_CORE)
+            glow_line(a, b, 1.6, C_PATH, 150)
         else:
-            draw_line_ex(a, b, 1.4 * ZOOM, C_EDGE_IDLE)
+            draw_line_ex(a, b, 1.2, C_EDGE_IDLE)
 
-    # --- C. PILIERS + CHATEAUX ---
-    for name, zone in sorted_zones:
+    # --- C. ondes de choc (arrivee d'une bille) ---
+    for pu in pulses:
+        r = 10 + pu["t"] * 46
+        glow_ring(pu["x"], pu["y"], r, 1.6, pu["c"], 120 * (1 - pu["t"]) ** 2)
+
+    # --- D. noeuds ---
+    breathe = 1.0 + math.sin(get_time() * 2.0) * 0.06
+    for name, zone in nodes_sorted:
         p = get_zone_pos(name)
         if not p:
             continue
         px, py = p
-        role = role_of(name, zone)
+        role = role_of(name)
         col = ROLE_COLOR[role]
-        glow = node_glow.get(key_of(name), 0.0)
-        h = BLOCK_DEPTH * (1.35 if role in ("start", "goal") else 1.0)
-        draw_iso_pillar(px, py, TILE_WIDTH * 0.72, TILE_HEIGHT * 0.72, h, col, glow)
-        if role in ("start", "goal"):
-            draw_texture_centered(chateau_texture, px, py - h + (5 * ZOOM),
-                                  CHATEAU_SCALE, col)
+        r = node_radius(name)
 
-    # --- D. DRAGONS + TRAINEES ---
-    bob = math.sin(get_time() * 5.0) * (4.0 * ZOOM)
-    to_draw = []
+        if role in ("start", "goal"):
+            glow_ring(px, py, r * breathe, 2.2, col, 210)
+            begin_blend_mode(BlendMode.BLEND_ADDITIVE)
+            draw_circle_v(Vector2(px, py), r * 2.6, with_alpha(col, 26))
+            end_blend_mode()
+            draw_circle_v(Vector2(px, py), r - 2, with_alpha(col, 48))
+        elif role == "path":
+            draw_circle_v(Vector2(px, py), r, Color(14, 18, 24, 255))
+            glow_ring(px, py, r, 1.6, col, 150)
+        else:
+            draw_circle_v(Vector2(px, py), r, Color(14, 18, 24, 255))
+            draw_ring(Vector2(px, py), r - 0.9, r + 0.9, 0, 360, 32,
+                      with_alpha(col, 190))
+
+    # --- E. BILLES LUMINEUSES (ex-dragons) ---
+    positions = []
     for d in drone_ids:
         pf, pt = get_zone_pos(drone_from[d]), get_zone_pos(drone_to[d])
         if not (pf and pt):
             continue
         n = int(d[1:])
-        off_x = math.cos(n * 1.5) * (10.0 * ZOOM)
-        off_y = math.sin(n * 1.5) * (5.0 * ZOOM)
-        cx = pf[0] + (pt[0] - pf[0]) * t_smooth + off_x
-        cy = pf[1] + (pt[1] - pf[1]) * t_smooth + off_y
-        to_draw.append((d, cx, cy))
+        # leger decalage angulaire pour que les billes ne se superposent pas
+        off = 7.0
+        cx = pf[0] + (pt[0] - pf[0]) * ts + math.cos(n * 1.7) * off
+        cy = pf[1] + (pt[1] - pf[1]) * ts + math.sin(n * 1.7) * off
+        positions.append((d, cx, cy))
 
-    for d, cx, cy in to_draw:
-        trails[d].append((cx, cy - BLOCK_DEPTH + 18.0 * ZOOM))
-        c = couleur_pour_drone(d)
+    for d, cx, cy in positions:
+        trails[d].append((cx, cy))
+        c = orb_color(d)
         pts = list(trails[d])
+        begin_blend_mode(BlendMode.BLEND_ADDITIVE)
         for i, (tx, ty) in enumerate(pts[:-1]):
             k = (i + 1) / len(pts)
-            draw_circle_v(Vector2(tx, ty), (1.0 + 3.0 * k) * ZOOM,
-                          shade(c, 1.0, int(90 * k * k)))
+            draw_circle_v(Vector2(tx, ty), 1.2 + 3.2 * k,
+                          with_alpha(c, 70 * k ** 2.2))
+        end_blend_mode()
 
-    to_draw.sort(key=lambda it: it[2])
-    for d, cx, cy in to_draw:
-        draw_dragon_frame(dragon_texture, current_frame, cx,
-                          cy - BLOCK_DEPTH + (18.0 * ZOOM) + bob,
-                          DRAGON_SCALE, couleur_pour_drone(d))
+    for d, cx, cy in positions:
+        glow_dot(cx, cy, 4.6, orb_color(d))
 
-    # --- E. LABELS: seulement ce qui compte, et sans plaque opaque ---
-    font_size = max(10, int(11 * ZOOM))
-    hover = get_mouse_position()
-    for name, zone in sorted_zones:
+    # --- F. LABELS: filtres, en quinconce, sans plaque ---
+    mouse = get_mouse_position()
+    for name, zone in nodes_sorted:
         p = get_zone_pos(name)
         if not p:
             continue
         px, py = p
-        role = role_of(name, zone)
-        near = math.hypot(hover.x - px, hover.y - py) < TILE_WIDTH * 0.5
+        role = role_of(name)
+        near = math.hypot(mouse.x - px, mouse.y - py) < 26
 
         if role in ("start", "goal"):
-            alpha, size = 255, font_size + 2
+            alpha, size = 255, 14
         elif near:
-            alpha, size = 255, font_size + 1
+            alpha, size = 255, 13
         elif role == "path":
-            alpha, size = 140, font_size
+            alpha, size = 130, 11
         else:
-            continue  # les noeuds neutres ne s'annoncent qu'au survol
+            continue
 
         txt = key_of(name)
         w = measure_text(txt, size)
-        # decalage en quinconce: casse les collisions de labels voisins
-        parity = (int(zone.x) + int(zone.y)) % 2
-        ty = py + (11 * ZOOM) + (parity * (size + 3))
+        parity = int(abs(zone.x) + abs(zone.y)) % 2
+        ty = py + node_radius(name) + 8 + parity * (size + 3)
         tx = int(px - w / 2)
-        draw_text(txt, tx + 1, int(ty) + 1, size, Color(0, 0, 0, alpha))  # ombre portee
-        draw_text(txt, tx, int(ty), size, Color(235, 240, 245, alpha))
+        draw_text(txt, tx + 1, int(ty) + 1, size, Color(0, 0, 0, alpha))
+        draw_text(txt, tx, int(ty), size, Color(232, 238, 244, alpha))
 
-    # --- F. HUD ---
+    # --- G. HUD ---
     label = f"TOUR {tour_simulation:02d} / {nombre_max_tours}"
     w = measure_spaced(label, 18, 3)
-    draw_rectangle(24, 24, 4, 26, C_PATH)
-    draw_text_spaced(label, 40, 26, 18, Color(225, 235, 240, 255), 3)
+    draw_rectangle(24, 26, 3, 24, C_PATH)
+    draw_text_spaced(label, 40, 27, 18, Color(226, 236, 242, 255), 3)
     prog = tour_simulation / nombre_max_tours if nombre_max_tours else 0
-    draw_rectangle(40, 56, int(w), 2, Color(255, 255, 255, 30))
-    draw_rectangle(40, 56, int(w * prog), 2, C_PATH)
+    draw_rectangle(40, 58, int(w), 2, Color(255, 255, 255, 28))
+    begin_blend_mode(BlendMode.BLEND_ADDITIVE)
+    draw_rectangle(40, 57, int(w * prog), 4, with_alpha(C_PATH, 60))
+    end_blend_mode()
+    draw_rectangle(40, 58, int(w * prog), 2, C_PATH)
+
+    draw_text(f"{len(drone_ids)} drones", 40, 74, 11, Color(120, 132, 148, 255))
 
     end_drawing()
 
-unload_texture(chateau_texture)
-unload_texture(dragon_texture)
 close_window()
