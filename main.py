@@ -4,9 +4,7 @@ from pyray import *
 from parser import MapParser
 from algo import Simulator
 
-# ============================================================
 #  1. SIMULATION
-# ============================================================
 parsed = MapParser("maps/hard/03_ultimate_challenge.txt").parse()
 simulator = Simulator(parsed)
 par_tour = simulator.run()
@@ -17,9 +15,7 @@ PAD_X, PAD_Y = 110, 90
 init_window(SCREEN_W, SCREEN_H, "Fly-in")
 set_target_fps(60)
 
-# ============================================================
 #  2. PALETTE — 4 roles
-# ============================================================
 C_BG = Color(8, 10, 15, 255)
 C_GRID = Color(255, 255, 255, 6)
 
@@ -38,6 +34,22 @@ ORB_COLORS = [
     Color(232, 152, 238, 255), Color(150, 238, 238, 255),
 ]
 
+# Couleur declaree par la carte elle-meme (zone.color dans le fichier .txt).
+# C'est la source de verite pour la teinte d'un hub -- pas le role.
+MAP_COLOR = {
+    "green": Color(110, 235, 140, 255),
+    "blue": Color(110, 200, 255, 255),
+    "red": Color(235, 95, 95, 255),
+    "orange": Color(255, 165, 70, 255),
+    "yellow": Color(255, 220, 80, 255),
+    "purple": Color(190, 130, 255, 255),
+    "brown": Color(200, 150, 105, 255),
+    "black": Color(140, 145, 155, 255),
+    "gold": Color(255, 205, 90, 255),
+    "gray": Color(175, 182, 195, 255),
+    "none": None,
+}
+
 
 def orb_color(drone_id):
     return ORB_COLORS[(int(drone_id[1:]) - 1) % len(ORB_COLORS)]
@@ -52,11 +64,8 @@ def shade(c, k):
                  min(255, int(c.b * k)), c.a)
 
 
-# ============================================================
 #  3. HELPERS DE RENDU
-# ============================================================
 def glow_dot(x, y, radius, color, layers=4, power=52):
-    """Bille lumineuse: halos additifs concentriques + coeur blanc."""
     begin_blend_mode(BlendMode.BLEND_ADDITIVE)
     for i in range(layers, 0, -1):
         k = i / layers
@@ -99,9 +108,7 @@ def measure_spaced(text, size, spacing=2):
     return sum(measure_text(c, size) + spacing for c in text) - spacing
 
 
-# ============================================================
 #  4. CONNEXIONS
-# ============================================================
 connections = []
 if getattr(parsed, "connections", None):
     for conn in parsed.connections:
@@ -121,9 +128,7 @@ def key_of(ref):
     return str(getattr(ref, "name", ref))
 
 
-# ============================================================
 #  5. ROLES
-# ============================================================
 start_zone_id = getattr(parsed, "start_zone", None)
 end_zone_id = getattr(parsed, "end_zone", getattr(parsed, "target_zone", None))
 
@@ -155,9 +160,20 @@ def role_of(name):
 ROLE_COLOR = {"start": C_START, "goal": C_GOAL, "path": C_PATH,
               "dead": C_DEAD, "struct": C_STRUCT}
 
-# ============================================================
+
+def node_color(name, zone):
+    """La teinte vient de la carte (zone.color). Le role ne sert que si la
+    carte n'a rien declare (couleur absente ou 'none'), et pour start/goal
+    qui gardent leur identite visuelle meme si la carte leur donne une couleur."""
+    role = role_of(name)
+    if role in ("start", "goal"):
+        return ROLE_COLOR[role]
+    mapped = MAP_COLOR.get(getattr(zone, "color", None))
+    if mapped is not None:
+        return mapped
+    return ROLE_COLOR[role]
+
 #  6. PROJECTION 2D — les coords du parser, mises a l'echelle
-# ============================================================
 xs = [z.x for z in parsed.zones.values()]
 ys = [z.y for z in parsed.zones.values()]
 span_x = max(1e-6, max(xs) - min(xs))
@@ -187,9 +203,7 @@ def node_radius(name):
     return 6.0 + min(degree.get(key_of(name), 1), 5) * 1.1
 
 
-# ============================================================
 #  7. ETAT
-# ============================================================
 drone_ids = [f"D{i}" for i in range(1, parsed.nb_drones + 1)]
 drone_from = {d: parsed.start_zone for d in drone_ids}
 drone_to = {d: parsed.start_zone for d in drone_ids}
@@ -203,9 +217,7 @@ turn_frame_counter = 0
 
 nodes_sorted = list(parsed.zones.items())
 
-# ============================================================
 #  8. BOUCLE
-# ============================================================
 while not window_should_close():
     turn_frame_counter += 1
     if turn_frame_counter >= TURN_DURATION_FRAMES:
@@ -254,7 +266,11 @@ while not window_should_close():
         a = Vector2(ax + ux * ra, ay + uy * ra)
         b = Vector2(bx - ux * rb, by - uy * rb)
         if hot:
-            glow_line(a, b, 1.6, C_PATH, 150)
+            # la ligne prend la teinte du hub d'arrivee (donc celle de la
+            # carte), pas un accent generique -- coherent avec les noeuds
+            zv = parsed.zones.get(v) if hasattr(parsed.zones, "get") else None
+            line_col = node_color(v, zv) if zv is not None else C_PATH
+            glow_line(a, b, 1.6, line_col, 150)
         else:
             draw_line_ex(a, b, 1.2, C_EDGE_IDLE)
 
@@ -271,7 +287,7 @@ while not window_should_close():
             continue
         px, py = p
         role = role_of(name)
-        col = ROLE_COLOR[role]
+        col = node_color(name, zone)
         r = node_radius(name)
 
         if role in ("start", "goal"):
@@ -281,12 +297,24 @@ while not window_should_close():
             end_blend_mode()
             draw_circle_v(Vector2(px, py), r - 2, with_alpha(col, 48))
         elif role == "path":
+            # emprunte: coeur sombre + anneau vif + leger halo additif pour
+            # que la couleur de la carte "brille" sans ecraser le fond
             draw_circle_v(Vector2(px, py), r, Color(14, 18, 24, 255))
-            glow_ring(px, py, r, 1.6, col, 150)
-        else:
+            begin_blend_mode(BlendMode.BLEND_ADDITIVE)
+            draw_circle_v(Vector2(px, py), r * 1.8, with_alpha(col, 22))
+            end_blend_mode()
+            glow_ring(px, py, r, 1.7, col, 175)
+        elif role == "dead":
+            # piege: meme teinte de carte, mais rendu mat et sans lueur
             draw_circle_v(Vector2(px, py), r, Color(14, 18, 24, 255))
             draw_ring(Vector2(px, py), r - 0.9, r + 0.9, 0, 360, 32,
-                      with_alpha(col, 190))
+                      with_alpha(col, 210))
+        else:
+            # structure neutre non empruntee: couleur de carte mais tres
+            # attenuee, pour qu'elle reste secondaire visuellement
+            draw_circle_v(Vector2(px, py), r, Color(14, 18, 24, 255))
+            draw_ring(Vector2(px, py), r - 0.9, r + 0.9, 0, 360, 32,
+                      with_alpha(col, 95))
 
     # --- E. BILLES LUMINEUSES (ex-dragons) ---
     positions = []
