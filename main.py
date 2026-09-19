@@ -214,25 +214,39 @@ tour_simulation = 0
 nombre_max_tours = max(par_tour.keys()) if par_tour else 0
 TURN_DURATION_FRAMES = 48
 turn_frame_counter = 0
+simulation_terminee = False  # une fois vrai, plus jamais reinitialise
 
 nodes_sorted = list(parsed.zones.items())
 
 #  8. BOUCLE
+
 while not window_should_close():
-    turn_frame_counter += 1
-    if turn_frame_counter >= TURN_DURATION_FRAMES:
-        turn_frame_counter = 0
-        if tour_simulation < nombre_max_tours:
-            tour_simulation += 1
-            for d in drone_ids:
-                drone_from[d] = drone_to[d]
-            if tour_simulation in par_tour:
-                for d, dest in par_tour[tour_simulation]:
-                    drone_to[d] = dest
-                    p = get_zone_pos(dest)
-                    if p:
-                        pulses.append({"x": p[0], "y": p[1], "t": 0.0,
-                                       "c": orb_color(d)})
+    # tant que la simu n'est pas finie, on avance normalement. Une fois
+    # finie, on ne touche plus JAMAIS a tour_simulation / turn_frame_counter
+    # -- avant, le "else: tour_simulation = 0" repartait de zero a l'infini,
+    # ce qui rejouait le HUD et redemarrait l'anim en boucle.
+    if not simulation_terminee:
+        turn_frame_counter += 1
+        if turn_frame_counter >= TURN_DURATION_FRAMES:
+            turn_frame_counter = 0
+            if tour_simulation < nombre_max_tours:
+                tour_simulation += 1
+                for d in drone_ids:
+                    drone_from[d] = drone_to[d]
+                if tour_simulation in par_tour:
+                    for d, dest in par_tour[tour_simulation]:
+                        drone_to[d] = dest
+                        p = get_zone_pos(dest)
+                        if p:
+                            pulses.append({"x": p[0], "y": p[1], "t": 0.0,
+                                           "c": orb_color(d)})
+            else:
+                # fin reelle: on fige tout, drone_from = drone_to une
+                # derniere fois pour que ts=1 ne bouge plus rien, puis stop
+                for d in drone_ids:
+                    drone_from[d] = drone_to[d]
+                turn_frame_counter = TURN_DURATION_FRAMES  # t reste a 1.0
+                simulation_terminee = True
 
     for pu in pulses:
         pu["t"] += 0.035
@@ -316,7 +330,7 @@ while not window_should_close():
             draw_ring(Vector2(px, py), r - 0.9, r + 0.9, 0, 360, 32,
                       with_alpha(col, 95))
 
-    # --- E. BILLES LUMINEUSES (ex-dragons) ---
+    # --- E. BILLES LUMINEUSES ---
     positions = []
     for d in drone_ids:
         pf, pt = get_zone_pos(drone_from[d]), get_zone_pos(drone_to[d])
@@ -383,6 +397,11 @@ while not window_should_close():
     draw_rectangle(40, 58, int(w * prog), 2, C_PATH)
 
     draw_text(f"{len(drone_ids)} drones", 40, 74, 11, Color(120, 132, 148, 255))
+
+    if simulation_terminee:
+        done_label = "ARRIVEE"
+        dw = measure_spaced(done_label, 13, 2)
+        draw_text_spaced(done_label, 40, 92, 13, C_GOAL, 2)
 
     end_drawing()
 

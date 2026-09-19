@@ -1,5 +1,6 @@
 import heapq
 import itertools
+from collections import deque
 from typing import Optional
 
 from parser import Zone, Connection, ParsedMap
@@ -40,6 +41,32 @@ class Graph:
             if (conn.zone_a == zone_a and conn.zone_b == zone_b) or (conn.zone_a == zone_b and conn.zone_b == zone_a):
                 return conn
         raise ValueError(f"No connection found between {zone_a} and {zone_b}")
+
+    def distances_to(self, target: str) -> dict[str, int]:
+        """
+        BFS non pondere depuis `target`, a rebours sur tout le graphe.
+        Sert UNIQUEMENT de tie-break heuristique dans TimeAwarePathFinder:
+        "a cout egal, quel etat rapproche le plus du but ?". Ca ne remplace
+        jamais le vrai cout de Dijkstra, ca departage juste les egalites.
+        """
+        dist: dict[str, int] = {target: 0}
+        queue = deque([target])
+
+        while queue:
+            current = queue.popleft()
+            for neighbor in self.adjacency[current]:
+                if neighbor not in dist:
+                    dist[neighbor] = dist[current] + 1
+                    queue.append(neighbor)
+
+        # zone isolee/inatteignable depuis target: on lui donne une distance
+        # "pire que tout le reste" plutot qu'un KeyError plus tard
+        pire = max(dist.values(), default=0) + 1
+        for zone_name in self.zones:
+            if zone_name not in dist:
+                dist[zone_name] = pire
+
+        return dist
 
 
 class PathFinder:
@@ -192,19 +219,36 @@ class TimeAwarePathFinder:
         - schedule : {zone: tour_d_arrivee} -> pour enregistrer dans les registres
         - events   : [(tour, "ce qui s'affiche")] -> pour le format de sortie final
         """
+        # distance-a-vol-d'oiseau (non ponderee) vers "end", calculee une
+        # seule fois par drone. Elle ne change JAMAIS le cout reel utilise
+        # par Dijkstra -> l'optimalite est intacte. Elle sert uniquement a
+        # DEPARTAGER les etats a cout strictement egal, en preferant celui
+        # qui rapproche du but. Sans ca, "attendre" et "reculer vers le
+        # noeud precedent" sont interchangeables aux yeux de l'algo des
+        # qu'ils coutent pareil, ce qui produit des allers-retours inutiles
+        # -- surtout visible sur le dernier drone, qui herite de toutes les
+        # reservations des precedents et tombe le plus souvent sur ces
+        # egalites.
+        dist_to_goal = self.graph.distances_to(end)
+
         start_state = (0, start)
 
         distances: dict[tuple[int, str], float] = {start_state: 0}
         previous: dict[tuple[int, str], Optional[tuple]] = {start_state: None}
 
-        # chaque élément de la queue : (cout, charge, compteur, tour, zone)
-        # - cout      : priorité principale (Dijkstra classique)
-        # - charge    : à cout égal, préfère la route la moins occupée
-        # - compteur  : dernier recours, garantit un ordre stable/déterministe
-        queue: list[tuple[float, int, int, int, str]] = [(0, 0, next(self._counter), 0, start)]
+        # chaque élément de la queue :
+        # (cout, distance_au_but, charge, compteur, tour, zone)
+        # - cout             : priorité principale (Dijkstra classique)
+        # - distance_au_but  : à cout égal, préfère l'état le plus proche de la fin
+        # - charge           : à distance égale, préfère la route la moins occupée
+        # - compteur         : dernier recours, garantit un ordre stable/déterministe
+        queue: list[tuple[float, int, int, int, int, str]] = [
+            (0, dist_to_goal[start], 0, next(self._counter), 0, start)
+        ]
 
         while queue:
-            current_cost, _current_charge, _counter, current_tour, current_zone = heapq.heappop(queue)
+            (current_cost, _dist, _current_charge, _counter,
+             current_tour, current_zone) = heapq.heappop(queue)
             current_state = (current_tour, current_zone)
 
             # entrée obsolète (un meilleur chemin vers cet état a déjà été
@@ -230,7 +274,9 @@ class TimeAwarePathFinder:
                 distances[wait_state] = wait_cost
                 previous[wait_state] = current_state
                 heapq.heappush(
-                    queue, (wait_cost, 0, next(self._counter), wait_state[0], wait_state[1])
+                    queue,
+                    (wait_cost, dist_to_goal[current_zone], 0, next(self._counter),
+                     wait_state[0], wait_state[1]),
                 )
 
             # ACTION 2 : essayer d'avancer vers chaque voisin direct.
@@ -274,7 +320,8 @@ class TimeAwarePathFinder:
                         previous[neighbor_state] = current_state
                         heapq.heappush(
                             queue,
-                            (arrival_cost, charge, next(self._counter), neighbor_state[0], neighbor_state[1]),
+                            (arrival_cost, dist_to_goal[neighbor], charge,
+                             next(self._counter), neighbor_state[0], neighbor_state[1]),
                         )
 
         # la queue s'est vidée sans jamais atteindre "end" -> aucun chemin
