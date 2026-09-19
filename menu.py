@@ -1,7 +1,5 @@
 from pyray import *
 
-init_window(1800, 900, "MENU")
-set_target_fps(60)
 def dessiner_bouton(x, y, texte):
     bouton = Rectangle(x, y, 200, 50)
     souris = get_mouse_position()
@@ -22,24 +20,26 @@ def dessiner_bouton(x, y, texte):
     draw_text(texte, int(x_texte), int(y_texte), taille_police, RED)
     return survole and clique
 
-il_faut_sortir = False
-bouton_choisi = None
+def afficher_menu():
+    il_faut_sortir = False
+    bouton_choisi = None
 
-while not window_should_close():
-    begin_drawing()
-    clear_background(Color(15, 17, 22, 255))
-    if dessiner_bouton(800, 425, "START"):
-        il_faut_sortir = True
-        bouton_choisi = "start"
+    while not window_should_close():
+        begin_drawing()
+        clear_background(Color(15, 17, 22, 255))
+        if dessiner_bouton(800, 425, "START"):
+            il_faut_sortir = True
+            bouton_choisi = "start"
 
-    if dessiner_bouton(800, 491, "CONTINUE"):
-        bouton_choisi = "continue"
-        il_faut_sortir = True
+        if dessiner_bouton(800, 491, "CONTINUE"):
+            bouton_choisi = "continue"
+            il_faut_sortir = True
 
-    if dessiner_bouton(800, 557, "SETTINGS"):
-        bouton_choisi = "settings"
-        il_faut_sortir = True
-    end_drawing()
+        if dessiner_bouton(800, 557, "SETTINGS"):
+            bouton_choisi = "settings"
+            il_faut_sortir = True
+        end_drawing()
 
-    if il_faut_sortir:
-        break
+        if il_faut_sortir:
+            break
+    return bouton_choisi
