@@ -154,10 +154,11 @@ class MiniPath:
 #  BOUTON
 # ============================================================
 class Button:
-    def __init__(self, label, x, y, w, h, enabled=True):
+    def __init__(self, label, x, y, w, h, enabled=True, accent=None):
         self.label = label
         self.rect = Rectangle(x, y, w, h)
         self.enabled = enabled
+        self.accent = accent if accent is not None else C_PATH
         self.hover_t = 0.0
         self.press_t = 0.0
 
@@ -183,7 +184,7 @@ class Button:
                       with_alpha(C_DISABLED, 200))
             return
 
-        col = C_PATH
+        col = self.accent
         fill_alpha = 12 + self.hover_t * 26
         border_alpha = 110 + self.hover_t * 140
 
@@ -215,12 +216,13 @@ def run_title_screen(has_save=False, title="FLY-IN", subtitle="ESTHETIQUE DARK /
 
     preview = MiniPath(panel_w + 60, SCREEN_H * 0.12, SCREEN_W - panel_w - 140, SCREEN_H * 0.76)
 
+    # NOTE: la clé du dictionnaire (a gauche des ":") est ce que cette
+    # fonction RENVOIE quand on clique -- "play", pas le texte affiche
+    # "JOUER". C'est cette clé qu'il faut tester dans main.py.
     buttons = {
         "play": Button("JOUER", btn_x, SCREEN_H * 0.52, btn_w, btn_h),
         "continue": Button("CONTINUER", btn_x, SCREEN_H * 0.52 + (btn_h + gap),
                            btn_w, btn_h, enabled=has_save),
-        "Menu": Button("MENU", btn_x, SCREEN_H * 0.52 + 2 * (btn_h + gap),
-                                   btn_w, btn_h),
         "settings": Button("PARAMETRES", btn_x, SCREEN_H * 0.52 + 2 * (btn_h + gap),
                            btn_w, btn_h),
     }

@@ -27,15 +27,15 @@ def afficher_menu():
     while not window_should_close():
         begin_drawing()
         clear_background(Color(15, 17, 22, 255))
-        if dessiner_bouton(800, 425, "START"):
+        if dessiner_bouton(500, 350, "START"):
             il_faut_sortir = True
             bouton_choisi = "start"
 
-        if dessiner_bouton(800, 491, "CONTINUE"):
+        if dessiner_bouton(500, 416, "CONTINUE"):
             bouton_choisi = "continue"
             il_faut_sortir = True
 
-        if dessiner_bouton(800, 557, "SETTINGS"):
+        if dessiner_bouton(500, 482, "SETTINGS"):
             bouton_choisi = "settings"
             il_faut_sortir = True
         end_drawing()
