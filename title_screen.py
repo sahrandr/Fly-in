@@ -2,15 +2,6 @@ import math
 import random
 from pyray import *
 
-# ============================================================
-#  ECRAN-TITRE — dans le theme exact de Fly-in.
-#  Reprend telles quelles les fonctions de glow de main.py, la
-#  meme palette de roles, et un mini graphe anime en fond pour
-#  que le menu ressemble a une preview du jeu, pas a un ecran
-#  generique plaque dessus.
-# ============================================================
-
-SCREEN_W, SCREEN_H = 1200, 800
 
 C_BG = Color(8, 10, 15, 255)
 C_GRID = Color(255, 255, 255, 6)
@@ -35,7 +26,6 @@ def with_alpha(c, a):
 
 
 def glow_dot(x, y, radius, color, layers=4, power=52):
-    """Identique a celle de main.py: bille lumineuse en blending additif."""
     begin_blend_mode(BlendMode.BLEND_ADDITIVE)
     for i in range(layers, 0, -1):
         k = i / layers
@@ -79,29 +69,23 @@ def measure_spaced(text, size, spacing=2):
 
 
 # ============================================================
-#  MINI GRAPHE DECORATIF
-#  Un chemin schematique, pas ta vraie carte, pour rester leger
-#  et ne pas dependre de MapParser sur l'ecran-titre. Meme code
-#  de rendu (couleurs de role, glow, billes) que le vrai jeu.
+#  MINI GRAPHE DÉCORATIF
 # ============================================================
 class MiniPath:
     def __init__(self, ox, oy, w, h):
         raw = [
-            ("start", 0.03, 0.55, "start"),
+            ("start", 0.05, 0.55, "start"),
             ("a", 0.28, 0.30, "path"),
             ("b", 0.28, 0.78, "struct"),
             ("c", 0.55, 0.55, "path"),
             ("d", 0.80, 0.30, "path"),
-            ("goal", 0.97, 0.55, "goal"),
+            ("goal", 0.95, 0.55, "goal"),
         ]
         self.nodes = {n: (ox + rx * w, oy + ry * h, role) for n, rx, ry, role in raw}
         self.edges_hot = [("start", "a"), ("a", "c"), ("c", "d"), ("d", "goal")]
         self.edges_idle = [("start", "b"), ("b", "c")]
         self.path_order = ["start", "a", "c", "d", "goal"]
 
-        # plusieurs billes qui parcourent le chemin en boucle, decalees.
-        # C'est une animation DECORATIVE de menu, pas la simulation reelle
-        # -- boucler ici est voulu, ca ne rejoue pas d'algo ni de HUD.
         self.orbs = [{"t": i / 3.0, "speed": 0.09, "color": ORB_COLORS[i % len(ORB_COLORS)]}
                      for i in range(3)]
 
@@ -128,7 +112,7 @@ class MiniPath:
             ax, ay, _ = self.nodes[a]
             bx, by, _ = self.nodes[b]
             draw_line_ex(Vector2(ax, ay), Vector2(bx, by), 1.2,
-                        with_alpha(Color(92, 106, 130, 255), 46 * alpha_mult))
+                         with_alpha(Color(92, 106, 130, 255), 46 * alpha_mult))
         for a, b in self.edges_hot:
             ax, ay, _ = self.nodes[a]
             bx, by, _ = self.nodes[b]
@@ -143,7 +127,7 @@ class MiniPath:
             else:
                 draw_circle_v(Vector2(x, y), r, Color(14, 18, 24, int(255 * alpha_mult)))
                 draw_ring(Vector2(x, y), r - 0.8, r + 0.8, 0, 360, 24,
-                         with_alpha(col, 160 * alpha_mult))
+                          with_alpha(col, 160 * alpha_mult))
 
         for o in self.orbs:
             x, y = self.point_on_path(o["t"])
@@ -206,24 +190,38 @@ class Button:
 
 
 # ============================================================
-#  ECRAN-TITRE PRINCIPAL
+#  ÉCRAN-TITRE PRINCIPAL
 # ============================================================
-def run_title_screen(has_save=False, title="FLY-IN", subtitle="ESTHETIQUE DARK / NEON"):
-    panel_w = 380
+def run_title_screen(has_save=False, title="FLY-IN", subtitle="ESTHÉTIQUE DARK / NEON"):
+    SCREEN_W = get_screen_width()
+    SCREEN_H = get_screen_height()
 
-    btn_w, btn_h, gap = 300, 50, 14
-    btn_x = 60
+    # Dynamic scaling calculations
+    panel_w = max(380, int(SCREEN_W * 0.32))
+    btn_w = min(300, panel_w - 80)
+    btn_h = 50
+    gap = 14
+    btn_x = (panel_w - btn_w) // 2
 
-    preview = MiniPath(panel_w + 60, SCREEN_H * 0.12, SCREEN_W - panel_w - 140, SCREEN_H * 0.76)
+    # Vertical centering of UI block
+    total_ui_h = 110 + (3 * btn_h + 2 * gap)
+    start_y = max(60, (SCREEN_H - total_ui_h) // 2)
 
-    # NOTE: la clé du dictionnaire (a gauche des ":") est ce que cette
-    # fonction RENVOIE quand on clique -- "play", pas le texte affiche
-    # "JOUER". C'est cette clé qu'il faut tester dans main.py.
+    title_y = start_y
+    buttons_y = title_y + 110
+
+    preview_x = panel_w + 40
+    preview_y = int(SCREEN_H * 0.12)
+    preview_w = SCREEN_W - preview_x - 60
+    preview_h = int(SCREEN_H * 0.76)
+
+    preview = MiniPath(preview_x, preview_y, preview_w, preview_h)
+
     buttons = {
-        "play": Button("JOUER", btn_x, SCREEN_H * 0.52, btn_w, btn_h),
-        "continue": Button("CONTINUER", btn_x, SCREEN_H * 0.52 + (btn_h + gap),
+        "play": Button("JOUER", btn_x, buttons_y, btn_w, btn_h),
+        "continue": Button("CONTINUER", btn_x, buttons_y + (btn_h + gap),
                            btn_w, btn_h, enabled=has_save),
-        "settings": Button("PARAMETRES", btn_x, SCREEN_H * 0.52 + 2 * (btn_h + gap),
+        "settings": Button("PARAMETRES", btn_x, buttons_y + 2 * (btn_h + gap),
                            btn_w, btn_h),
     }
 
@@ -244,29 +242,32 @@ def run_title_screen(has_save=False, title="FLY-IN", subtitle="ESTHETIQUE DARK /
         begin_drawing()
         clear_background(C_BG)
 
+        # Background grid
         for gx in range(0, SCREEN_W, 40):
             draw_line(gx, 0, gx, SCREEN_H, C_GRID)
         for gy in range(0, SCREEN_H, 40):
             draw_line(0, gy, SCREEN_W, gy, C_GRID)
 
-        # separation subtile entre le panneau et l'apercu, comme un HUD
+        # Panel separator
         draw_line_ex(Vector2(panel_w, 40), Vector2(panel_w, SCREEN_H - 40), 1.0,
-                    with_alpha(Color(255, 255, 255, 255), 14))
+                      with_alpha(Color(255, 255, 255, 255), 14))
 
         preview.draw()
 
+        # Title block
         title_size = 40
-        draw_text_spaced(title, btn_x, SCREEN_H * 0.30, title_size, C_TEXT, 5)
+        draw_text_spaced(title, btn_x, title_y, title_size, C_TEXT, 5)
         sub_size = 11
-        draw_text_spaced(subtitle, btn_x + 2, SCREEN_H * 0.30 + title_size + 12,
+        draw_text_spaced(subtitle, btn_x + 2, title_y + title_size + 12,
                          sub_size, with_alpha(C_MUTED, 220), 3)
 
         breathe = 1.0 + math.sin(elapsed * 1.4) * 0.08
-        glow_ring(btn_x + 6, SCREEN_H * 0.30 - 14, 3 * breathe, 1.2, C_PATH, 200)
+        glow_ring(btn_x + 6, title_y - 14, 3 * breathe, 1.2, C_PATH, 200)
 
         for btn in buttons.values():
             btn.draw()
 
+        # Footer
         foot = "15 drones  ·  26 tours  ·  carte: ultimate_challenge"
         draw_text(foot, btn_x, SCREEN_H - 46, 11, with_alpha(C_MUTED, 150))
 
@@ -276,8 +277,11 @@ def run_title_screen(has_save=False, title="FLY-IN", subtitle="ESTHETIQUE DARK /
 
 
 if __name__ == "__main__":
-    init_window(SCREEN_W, SCREEN_H, "Fly-in")
+    # Correct full-screen borderless window initialization
+    set_config_flags(ConfigFlags.FLAG_BORDERLESS_WINDOWED_MODE)
+    init_window(0, 0, "Fly-in")
     set_target_fps(60)
+
     choice = run_title_screen(has_save=False)
     print(f"Choix: {choice}")
     close_window()

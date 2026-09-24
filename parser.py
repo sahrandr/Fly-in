@@ -1,4 +1,4 @@
-"""Parser du format de carte Fly-in."""
+
 import sys
 from typing import Optional
 

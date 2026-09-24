@@ -2,21 +2,13 @@ import os
 from pyray import *
 from title_screen import (
     Button, with_alpha, draw_text_spaced, measure_spaced, glow_ring,
-    SCREEN_W, SCREEN_H, C_BG, C_GRID, C_TEXT, C_MUTED, C_PATH, C_START, C_GOAL,
+    C_BG, C_GRID, C_TEXT, C_MUTED, C_PATH, C_START, C_GOAL,
 )
 
-# ============================================================
-#  ECRAN DE SELECTION DE CARTE
-#  Scanne le dossier maps/ a chaque appel: pas de liste ecrite
-#  en dur, donc ajouter un fichier .txt dans un des sous-dossiers
-#  le fait apparaitre automatiquement, sans toucher au code.
-# ============================================================
 
 C_HARD = Color(225, 95, 95, 255)
 C_CHALLENGER = Color(190, 130, 255, 255)
 
-# ordre d'affichage voulu; toute categorie non listee ici est ajoutee
-# ensuite, triee alphabetiquement, avec une couleur neutre
 CATEGORY_ORDER = ["easy", "medium", "hard", "challenger"]
 CATEGORY_COLOR = {
     "easy": C_START,
@@ -57,10 +49,15 @@ def format_map_name(filename):
 
 def run_map_select(maps_root="maps"):
     """
-    Boucle bloquante: affiche les cartes disponibles, groupees par
-    categorie. Retourne le CHEMIN du fichier .txt clique, ou None si
-    la fenetre est fermee pendant la selection.
+    Boucle bloquante: affiche les cartes disponibles, groupées par
+    catégorie. Retourne le CHEMIN du fichier .txt cliqué, ou None si
+    la fenêtre est fermée pendant la sélection.
     """
+    # 1. On récupère dynamiquement la VRAIE taille de l'écran 
+    # au lieu de l'importer statiquement depuis title_screen.
+    SCREEN_W = get_screen_width()
+    SCREEN_H = get_screen_height()
+
     categories = scan_maps(maps_root)
     cat_names = [c for c in CATEGORY_ORDER if c in categories]
     cat_names += sorted(c for c in categories if c not in CATEGORY_ORDER)
@@ -68,6 +65,8 @@ def run_map_select(maps_root="maps"):
     col_w = 250
     gap_x = 26
     total_w = len(cat_names) * col_w + max(0, len(cat_names) - 1) * gap_x
+    
+    # 2. Le centrage de l'interface utilisera maintenant le SCREEN_W réel
     start_x = max(60, (SCREEN_W - total_w) // 2)
     top_y = 190
     btn_h = 38
@@ -117,7 +116,7 @@ def run_map_select(maps_root="maps"):
             btn.draw()
 
         if not entries:
-            msg = f"aucune carte trouvee dans '{maps_root}/'"
+            msg = f"aucune carte trouvée dans '{maps_root}/'"
             draw_text(msg, start_x, top_y + 20, 14, with_alpha(C_MUTED, 220))
 
         end_drawing()
@@ -129,8 +128,11 @@ def run_map_select(maps_root="maps"):
 
 
 if __name__ == "__main__":
-    init_window(SCREEN_W, SCREEN_H, "Fly-in")
+    # 3. Initialisation borderless sans bordures comme sur le main.py
+    set_config_flags(ConfigFlags.FLAG_BORDERLESS_WINDOWED_MODE)
+    init_window(0, 0, "Fly-in")
     set_target_fps(60)
+    
     choix = run_map_select()
     print(f"Carte choisie: {choix}")
     close_window()

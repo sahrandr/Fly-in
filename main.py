@@ -7,18 +7,18 @@ from collections import deque
 from parser import MapParser, MapParsingError
 from algo import Simulator
 
-init_window(1200, 800, "Fly-in")
-set_target_fps(20)
+set_config_flags(ConfigFlags.FLAG_BORDERLESS_WINDOWED_MODE)
+init_window(0, 0, "Fly-in")
+set_target_fps(60)
 
 resultat = run_title_screen(has_save=False)
 
 map_path = None
 if resultat == "play":
-    map_path = run_map_select()  # None si la fenetre est fermee pendant le choix
+    map_path = run_map_select()
 
 if map_path:
 
-    #  1. SIMULATION
     try:
         parsed = MapParser(map_path).parse()
         simulator = Simulator(parsed)
@@ -28,14 +28,13 @@ if map_path:
         close_window()
         sys.exit(1)
 
-    # sortie terminal au format du sujet (VII.5), une ligne par tour
     simulator.display(par_tour)
     print(f"Total turns: {max(par_tour) if par_tour else 0}")
 
-    SCREEN_W, SCREEN_H = 1200, 800
+    SCREEN_W = get_screen_width() 
+    SCREEN_H = get_screen_height()
     PAD_X, PAD_Y = 110, 90
 
-    #  2. PALETTE — 4 roles
     C_BG = Color(8, 10, 15, 255)
     C_GRID = Color(255, 255, 255, 6)
 
@@ -248,8 +247,6 @@ if map_path:
 
     nodes_sorted = list(parsed.zones.items())
 
-    #  8. BOUCLE
-
     while not window_should_close():
         if not simulation_terminee:
             turn_frame_counter += 1
@@ -343,7 +340,6 @@ if map_path:
                 draw_ring(Vector2(px, py), r - 0.9, r + 0.9, 0, 360, 32,
                         with_alpha(col, 95))
 
-            # type de zone : anneau externe = restricted, point = priority
             if zone.zone_type == "restricted":
                 draw_ring(Vector2(px, py), r + 4, r + 5.2, 0, 360, 32,
                         with_alpha(C_DEAD, 200))
@@ -413,6 +409,7 @@ if map_path:
         draw_rectangle(40, 58, int(w * prog), 2, C_PATH)
 
         draw_text(f"{len(drone_ids)} drones", 40, 74, 11, Color(120, 132, 148, 255))
+        # draw_text(f"nbr_tours =" ,len(connections))
         draw_text("anneau externe = restricted (2 tours)   "
                   "point = priority   anneau rouge = blocked",
                   40, SCREEN_H - 30, 11, Color(120, 132, 148, 255))
