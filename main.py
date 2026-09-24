@@ -14,7 +14,7 @@ set_target_fps(60)
 resultat = run_title_screen(has_save=False)
 
 map_path = None
-if resultat == "play":
+if resultat == "new game":
     map_path = run_map_select()
 
 if map_path:
@@ -147,7 +147,6 @@ if map_path:
         return str(getattr(ref, "name", ref))
 
 
-    #  5. ROLES
     start_zone_id = getattr(parsed, "start_zone", None)
     end_zone_id = getattr(parsed, "end_zone", getattr(parsed, "target_zone", None))
 
@@ -409,7 +408,6 @@ if map_path:
         draw_rectangle(40, 58, int(w * prog), 2, C_PATH)
 
         draw_text(f"{len(drone_ids)} drones", 40, 74, 11, Color(120, 132, 148, 255))
-        # draw_text(f"nbr_tours =" ,len(connections))
         draw_text("anneau externe = restricted (2 tours)   "
                   "point = priority   anneau rouge = blocked",
                   40, SCREEN_H - 30, 11, Color(120, 132, 148, 255))

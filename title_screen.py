@@ -218,10 +218,12 @@ def run_title_screen(has_save=False, title="FLY-IN", subtitle="ESTHÉTIQUE DARK 
     preview = MiniPath(preview_x, preview_y, preview_w, preview_h)
 
     buttons = {
-        "play": Button("JOUER", btn_x, buttons_y, btn_w, btn_h),
-        "continue": Button("CONTINUER", btn_x, buttons_y + (btn_h + gap),
+        "new game": Button("NEW GAME", btn_x, buttons_y, btn_w, btn_h),
+        "continue": Button("CONTINUER", btn_x, buttons_y + 1 * (btn_h + gap),
                            btn_w, btn_h, enabled=has_save),
-        "settings": Button("PARAMETRES", btn_x, buttons_y + 2 * (btn_h + gap),
+        "paramettres": Button("PARAMETTRES", btn_x, buttons_y + 2 * (btn_h + gap),
+                    btn_w, btn_h, enabled=has_save),
+        "settings": Button("QUIT", btn_x, buttons_y + 3 * (btn_h + gap),
                            btn_w, btn_h),
     }
 
