@@ -1,11 +1,10 @@
-
-import sys
 from typing import Optional
 
 
 class MapParsingError(Exception):
     """Erreur de syntaxe ou de validation dans un fichier de carte."""
     pass
+
 
 class Zone:
     """Une zone du reseau."""
@@ -114,9 +113,6 @@ class MapParser:
                 f"(dashes and spaces are forbidden)"
             )
 
-    # ------------------------------------------------------------------
-    #  Extraction
-    # ------------------------------------------------------------------
     @staticmethod
     def _split_metadata(reste: str, numero_ligne: int) -> tuple[str, str]:
         """Separe 'partie principale' et 'contenu des crochets'.
@@ -212,9 +208,6 @@ class MapParser:
         )
         return parties[0], parties[1], metadata
 
-    # ------------------------------------------------------------------
-    #  Parsing
-    # ------------------------------------------------------------------
     def _add_zone(
         self,
         ligne: str,
@@ -328,10 +321,10 @@ class MapParser:
             with open(self.filepath, "r", encoding="utf-8") as f:
                 for numero_ligne, brut in enumerate(f, start=1):
                     ligne = brut.strip()
-                    
+
                     if ligne == "" or ligne.startswith("#"):
                         continue
-                        
+
                     # la 1re ligne utile doit etre nb_drones
                     if not premiere_ligne_vue:
                         premiere_ligne_vue = True
@@ -340,37 +333,39 @@ class MapParser:
                                 f"Line {numero_ligne}: the first line "
                                 f"must define nb_drones"
                             )
-                            
+
                     self._parse_line(ligne, result, numero_ligne)
-                    
+
         except (OSError, UnicodeDecodeError) as err:
             raise MapParsingError(
                 f"Cannot read '{self.filepath}': {err}"
             ) from err
 
         # --- VÉRIFICATIONS FINALES ---
-        
-        # 1. Si premiere_ligne_vue est toujours False, c'est qu'il n'y avait rien à lire
+
+        # 1. Si premiere_ligne_vue est toujours False, c'est qu'il n'y avait
+        #    rien à lire
         if not premiere_ligne_vue:
             raise MapParsingError("Le fichier est completement vide.")
-            
+
         # 2. Vérification des données requises
         if result.nb_drones == 0:
             raise MapParsingError("Map must define nb_drones")
-            
+
         if result.start_zone is None or result.end_zone is None:
             raise MapParsingError(
                 "Map must have exactly one start_hub and one end_hub"
             )
-        
-        coordones_vue = set()
+
+        coordones_vue: set[tuple[int, int]] = set()
         for nom_zone, zone in result.zones.items():
             coord = (zone.x, zone.y)
             if coord in coordones_vue:
                 raise MapParsingError(
-                    f"Invalid map: Les zones ne peuvent pas se superposer. "
-                    f"Coordonnées {coord} en double trouvées sur la zone '{nom_zone}'."
+                    f"Invalid map: Les zones ne peuvent pas se "
+                    f"superposer. Coordonnées {coord} en double "
+                    f"trouvées sur la zone '{nom_zone}'."
                 )
             coordones_vue.add(coord)
-            
+
         return result

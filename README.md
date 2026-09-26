@@ -4,107 +4,175 @@
 
 ## Description
 
-**Fly-in** routes a fleet of drones from a start zone to an end zone through a
-network of connected zones, in the **fewest possible simulation turns**, while
-respecting zone capacities, connection capacities and per-zone movement costs.
+Fly-in is a fleet-routing simulator: a set of drones must travel from a
+single start zone to a single end zone through a network of connected
+zones, in the fewest possible simulation turns, while respecting per-zone
+and per-connection capacity limits, zone-type movement costs (`normal`,
+`restricted`, `priority`, `blocked`), and simultaneous-movement scheduling.
 
-The program:
+The project has three independent pieces, kept in separate files so each
+can be reasoned about on its own:
 
-1. parses a map file (zones, connections, drone count) and validates it;
-2. plans every drone's route with a time-aware pathfinding algorithm;
-3. prints the plan in the required text format (one line per turn);
-4. plays the result as an animated graphical simulation (raylib).
-
-No graph library is used: the graph, the search and the reservation system are
-implemented from scratch, in an object-oriented design.
-
-![Simulation view](docs/screenshot.png)
+- **`parser.py`** — reads and validates a map file into a `ParsedMap`
+  (zones, connections, drone count, start/end hubs).
+- **`algo.py`** — the routing engine: a time-expanded A* pathfinder plans
+  one drone at a time, aware of every reservation made by drones planned
+  before it, so later drones route around already-occupied zones/links
+  instead of colliding with them.
+- **`main.py`** (with `title_screen.py` and `map_select.py`) — a raylib
+  2D interface: a title screen, a map browser that scans the `maps/`
+  folder, and the live simulation view.
 
 ## Instructions
 
 ### Requirements
 
-- Python **3.10 or later**
-- [raylib](https://pypi.org/project/raylib/) (provides the `pyray` module) for
-  the graphical interface
-- `flake8` and `mypy` for linting
-
-### Installation
-
-Create a virtual environment **outside the repository** (`flake8 .` scans every
-sub-folder, including a `venv` placed inside it), then install:
+- Python 3.10 or later
+- The `raylib` Python bindings (provides the `pyray` module used for the
+  graphical interface)
 
 ```bash
-python3 -m venv ~/.venvs/fly-in
-source ~/.venvs/fly-in/bin/activate
-make install
+pip install raylib
 ```
 
-### Running
-
-Maps are read from `maps/<category>/<name>.txt`. Run from the repository root:
+### Running the simulation
 
 ```bash
-make run
+python3 main.py
 ```
 
-1. Click **JOUER** on the title screen.
-2. Click a map: categories and files are discovered automatically by scanning
-   `maps/`, so a new `.txt` file dropped in a sub-folder appears without any
-   code change.
-3. The plan is printed in the terminal, then the animation plays. Hover a zone
-   to display its name. Close the window to quit.
+This opens a single window that walks through three screens in order:
 
-If the map is invalid, the program prints `Error: Line N: <cause>` on stderr and
-exits with status 1, without a traceback.
+1. **Title screen** — `NEW GAME` (play), `CONTINUER` (disabled until a save system exists),`PARAMETTRES`(disabled) and `QUIT` (settings).
+2. **Map selection** — every `.txt` file found under `maps/`, grouped by
+   its sub-folder (`easy`, `medium`, `hard`, `challenger`, or any other
+   folder you add — no code change needed to pick up new maps).
+3. **Simulation** — the chosen map is parsed, routed, and animated.
 
-### Makefile rules
+Controls during the simulation:
 
-| Rule | Description |
-|---|---|
-| `make install` | Install `raylib`, `flake8` and `mypy` with pip |
-| `make run` | Launch the program (`python3 main.py`) |
-| `make debug` | Launch the program under `pdb` |
-| `make clean` | Remove `__pycache__`, `.mypy_cache` and other caches |
-| `make lint` | `flake8 .` and `mypy .` with the flags required by the subject |
-| `make lint-strict` | `flake8 .` and `mypy . --strict` |
+- `F11` — toggle borderless fullscreen (the layout re-centers itself on
+  resize, it does not just stretch a fixed-size render).
+- Hovering a zone shows its name even if it isn't on any drone's path.
 
-### Map file format
+The terminal also prints the simulation in the exact turn-by-turn format
+required by the subject (one line per turn, `D<id>-<zone>` entries,
+space-separated), followed by the total turn count.
 
-```text
-# A comment is a full line starting with '#'
-# First line: number of drones (positive integer)
-nb_drones: 5
-# Exactly one start and one end
-start_hub: hub 0 0 [color=green]
-end_hub: goal 10 10 [color=yellow]
-# Regular zones: <name> <x> <y> [metadata, any order]
-hub: roof1 3 4 [zone=restricted color=red]
-hub: corridorA 4 3 [zone=priority max_drones=2]
-hub: tunnelB 7 4
-# Bidirectional connections: <zone1>-<zone2> [metadata]
-connection: hub-roof1
-connection: corridorA-tunnelB [max_link_capacity=2]
+## Algorithm choices and implementation strategy
+
+### Time-expanded search, one drone at a time
+
+Each drone is planned in order (`D1`, `D2`, ...) against a **shared**
+pair of registries — `OccupationRegistry` (per-zone, per-turn drone
+counts) and `LinkOccupationRegistry` (per-connection, per-turn drone
+counts). A drone's path is *not* computed on the plain zone graph:
+states are `(turn, zone)` pairs, so the search naturally reasons about
+*when* a zone or connection is free, not just *whether* it's reachable.
+At every state, two actions are considered:
+
+- **wait** one turn in place (always legal, cost 1) — this is how the
+  algorithm expresses "strategic waiting when movement is not possible",
+  required by the subject (VII.1).
+- **advance** to a neighboring zone, only if both the destination zone
+  and the connection have spare capacity at the arrival turn. A move
+  into a `restricted` zone costs 2 turns and is registered on both
+  transit turns, matching the subject's rule that the drone occupies
+  the connection for the whole transit and cannot idle on it midway.
+
+Because later drones see every reservation made by earlier ones, the
+overall schedule is conflict-free by construction — no separate
+deadlock-detection pass is needed, avoiding a conflict is built into
+what counts as a legal move.
+
+### A* with an admissible heuristic
+
+The search is ordered by `f = g + h`, where `g` is the real cost so far
+(in turns) and `h` is the hop-count distance to the end zone (an
+unweighted BFS computed once per drone). Since every real move costs at
+least 1 turn, `h` never overestimates the true remaining cost, so the
+search stays optimal while exploring far fewer states than plain
+Dijkstra — this matters most on the larger maps (12–25 drones), where
+the state space (`turn` × `zone`) grows quickly.
+
+Three tie-breakers apply, in order, when two states share the same
+`f`-score:
+
+1. **Priority-zone preference** — the subject requires that `priority`
+   zones be preferred even though they cost the same as `normal` zones
+   (1 turn). A zone of type `priority` wins ties over any other type.
+2. **Load balancing** — among equally good options, the search prefers
+   the zone/connection used least so far by previous drones, spreading
+   traffic across parallel routes instead of always taking the first
+   one found.
+3. **Insertion order** — a monotonically increasing counter, purely to
+   keep the underlying heap's ordering deterministic.
+
+### Correctness details worth flagging
+
+- **Start and end zones have no capacity limit**, per the subject
+  (VII.4): "all drones may start in the start zone, and any number of
+  drones may be delivered to the end zone." The parser's own `max_drones`
+  default (`1`) would otherwise apply to these two zones as well, so the
+  pathfinder explicitly overrides their capacity to unlimited rather
+  than trusting the parsed value for these two specific zones.
+- **Occupancy is continuous, not just at arrival.** A drone that waits
+  several turns in a zone is registered as present on *every* one of
+  those turns (including the wait turns), not only the turn it first
+  arrived — otherwise another drone could be scheduled into a zone that
+  is, in fact, still occupied.
+
+### Complexity
+
+For a single drone, the search explores at most `O(V · T)` states, where
+`V` is the number of zones and `T` is the bound on turns before giving
+up (`TimeAwarePathFinder.MAX_TOUR = 200`, a safety net against an
+unsolvable map rather than a tuning parameter). Each state expansion is
+`O(deg(zone))`. With `heapq`, each push/pop is `O(log(V·T))`. Planning
+`N` drones sequentially gives roughly `O(N · V · T · log(V·T))` overall.
+Paths are **not** cached or reused between drones — each drone's
+occupancy constraints differ from the previous one's, so a cached path
+would usually be stale anyway; recomputing keeps the implementation
+simple at a cost that stays small in practice for the map sizes
+provided.
+
+## Visual representation
+
+The interface is a 2D raylib scene rather than an isometric one — this
+keeps every element's screen position a direct, cheap linear
+transform of its map coordinates, so the whole layout recomputes
+instantly on window resize (used for the borderless-fullscreen toggle).
+
+- **Zones** are colored by the role they play in *this* solved
+  simulation, not just by their declared type: `start` and `goal` keep a
+  fixed identity color; a zone actually used by at least one drone's
+  path is drawn brighter than one that's never visited; a `blocked` zone
+  is dimmed. A zone's own declared `color=` metadata is used as its base
+  tint whenever the map specifies one, so the graphical view reflects
+  what the map author intended, not just an internal role label.
+  `restricted` zones get an extra outer ring, `priority` zones an extra
+  inner dot — so the zone-type rules from the subject are visible at a
+  glance without reading the map file.
+- **Drones** are rendered as small glowing orbs (additive-blended
+  circles) that interpolate smoothly between their `(turn)` and
+  `(turn + 1)` zone positions, each leaving a short fading trail — this
+  turns the discrete, turn-by-turn schedule the algorithm produces into
+  a continuous animation, which makes it much easier to *see* things
+  like several drones converging on the end zone at once, or a drone
+  waiting in place, than reading raw `D<id>-<zone>` log lines would.
+- A **HUD** shows the current turn out of the total, a progress bar, and
+  the drone count; an "ARRIVEE" marker appears once every drone is
+  delivered and the animation holds on the final frame instead of
+  looping or resetting.
+- The **map browser** screen groups available maps by difficulty folder,
+  color-coded (`easy` green, `medium` gold, `hard` red, `challenger`
+  purple), so the player can gauge a map's difficulty before opening it.
+
+## Example input and output
+
+Given a map such as (this is the example from the subject itself):
+
 ```
-
-| Metadata | Applies to | Values | Default |
-|---|---|---|---|
-| `zone` | hubs | `normal`, `blocked`, `restricted`, `priority` | `normal` |
-| `color` | hubs | any single word | `none` |
-| `max_drones` | hubs | positive integer (ignored on start and end) | `1` |
-| `max_link_capacity` | connections | positive integer | `1` |
-
-Zone names cannot contain dashes or spaces. Comments must be on their own line (starting with `#`). The parser
-rejects: a missing or misplaced `nb_drones`, duplicate zone names, non-integer
-coordinates, malformed brackets or `key=value` pairs, unknown metadata keys,
-invalid zone types, non-positive capacities, connections to undefined zones,
-self-connections and duplicate connections (`a-b` and `b-a` are the same).
-
-## Example
-
-Input (`nb_drones: 5`, the map from the subject):
-
-```text
 nb_drones: 5
 
 start_hub: hub 0 0 [color=green]
@@ -122,197 +190,29 @@ connection: corridorA-tunnelB [max_link_capacity=2]
 connection: tunnelB-goal
 ```
 
-Output (one line per turn, 6 turns):
+running `algo.py` = 
 
-```text
-D1-corridorA D3-hub-roof1
-D1-tunnelB D2-corridorA D3-roof1
-D1-goal D2-tunnelB D3-roof2 D4-corridorA
-D2-goal D3-goal D4-tunnelB D5-corridorA
-D4-goal D5-tunnelB
-D5-goal
-Total turns: 6
+```
+D1-roof1 D2-corridorA
+D1-roof2 D2-tunnelB
+D1-goal D2-goal
+Total turns: 3
 ```
 
-How to read it: on turn 1, `D3` leaves for the **restricted** zone `roof1`. That
-costs two turns, so it is *in flight* on the connection (`D3-hub-roof1`, named
-`<zone1>-<zone2>`) and lands in `roof1` on turn 2. `D1` and `D2` share the
-`corridorA`/`tunnelB` route, `corridorA` allowing 2 drones, `tunnelB` only 1 (so
-`D2` follows `D1` one turn behind). The `blocked` zone `obstacleX` is never used.
-
-## Algorithm
-
-### Overview
-
-Routing is done by **prioritized (sequential) planning on a time-expanded
-graph**:
-
-- drones are planned one after the other (`D1`, then `D2`, ...);
-- each drone runs a **Dijkstra search over states `(turn, zone)`** that takes
-  into account every reservation made by the drones already planned;
-- once a drone's path is found, all the zones and connections it uses are
-  **reserved turn by turn**, and the next drone plans around them.
-
-Because a path is only accepted if it fits inside the existing reservations,
-conflicts and deadlocks cannot occur by construction, and a drone that cannot
-advance simply **waits**, which is an explicit action of the search.
-
-### The search (`TimeAwarePathFinder`)
-
-A state `(t, z)` means "at the end of turn `t`, the drone is in zone `z`". From a
-state, two kinds of actions are explored:
-
-- **Wait**: go to `(t+1, z)`, only if zone `z` still has capacity at turn `t+1`
-  (another drone may be scheduled to arrive there).
-- **Move** to a neighbour `n`: go to `(t + cost(n), n)` where `cost` is 1 for
-  `normal` and `priority` zones and 2 for `restricted` zones. The move is
-  allowed only if `n` has room at the arrival turn and the connection has room
-  on **every turn of the crossing**. `blocked` zones are removed from the graph
-  before the search starts.
-
-Since the cost of a state is its turn number, the first time the search pops the
-end zone, it has found the **earliest possible arrival for this drone** given
-the reservations.
-
-Ties between equally fast paths are broken in this order:
-
-1. **Priority zones**: fewer non-`priority` zones entered (so `priority` zones
-   are preferred, as the subject requires);
-2. **Distance to the goal**: unweighted BFS distance, computed once and cached;
-3. **Load**: how many reservations the next zone and connection already carry,
-   which spreads drones over parallel routes.
-
-### Rules handled
-
-| Rule of the subject | Implementation |
-|---|---|
-| Zone capacity `max_drones` | `OccupationRegistry`: drones per zone **per turn**, waiting turns included |
-| Start / end unlimited | `Graph.zone_capacity` returns "unlimited" for them |
-| Link capacity | `LinkOccupationRegistry`: drones per connection per turn |
-| Moving out frees capacity the same turn | occupancy is counted on end-of-turn states, so a drone can enter as another leaves |
-| Restricted zone = 2 turns, cannot wait on the link | state jumps `(t, a) -> (t+2, b)`; the link is reserved on both turns; capacity of `b` is checked at arrival only |
-| Output of a drone in flight | turn `t+1`: `D<ID>-<zone1>-<zone2>`, turn `t+2`: `D<ID>-<zone2>` |
-| Any number of drones | search horizon scales with `nb_drones`; the start is unlimited, so waiting there is always possible |
-
-### Complexity and caching
-
-With `Z` zones, `N` drones, `d` the maximum degree and `T` the number of turns
-explored (bounded by a horizon proportional to `Z * N`, and close to the final
-number of turns in practice):
-
-- one drone: at most `Z * T` states, each expanded in `O(d)` with `O(1)`
-  reservation lookups (dictionaries), so `O(Z * T * d * log(Z * T))`;
-- all drones: `N` times that;
-- memory: `O(N * T)` reservations plus `O(Z * T)` for the current search.
-
-Caching: BFS distances to the goal are computed **once**, and connections are
-found in `O(1)` through a dictionary. Paths themselves are *not* cached between
-drones on purpose, since each one depends on the reservations of the previous
-drones.
-
-Measured on the development machine: 1000 drones through a 3-zone chain are
-planned in about 0.8 s, and 100 drones on a 62-zone grid with restricted and
-priority zones in about 0.6 s.
-
-### Limitations
-
-Sequential planning is a **heuristic**: the result depends on the drone order
-and is not proven optimal. A joint optimization (for example a min-cost flow on
-the time-expanded graph, or conflict-based search) could find shorter plans on
-some maps, at a higher cost.
-
-### Results against the reference targets
-
-| Map | Drones | Target | Obtained |
-|---|---|---|---|
-| Linear path | 2 | <= 6 | TODO |
-| Simple fork | 4 | <= 8 | TODO |
-| Basic capacity | 4 | <= 6 | TODO |
-| Dead end trap | 5 | <= 12 | TODO |
-| Circular loop | 6 | <= 15 | TODO |
-| Priority puzzle | 5 | <= 12 | TODO |
-| Maze nightmare | 8 | <= 30 | TODO |
-| Capacity hell | 12 | <= 35 | TODO |
-| Ultimate challenge | 15 | <= 45 | TODO |
-| The Impossible Dream (optional) | 25 | record 45 | TODO |
-
-## Visual representation
-
-The graphical interface (raylib) is designed so that the state of the simulation
-can be read at a glance:
-
-- **Zone colors come from the map** (`color=...`). Known names are drawn in their
-  own tint; unknown names fall back to a role color.
-- **Start** and **end** are drawn as large glowing rings (green and gold).
-- **Zone types** are visible on the map: a red outer ring marks a `restricted`
-  zone (2 turns), a small central dot marks a `priority` zone, and a red ring
-  marks a `blocked` zone. A legend is displayed at the bottom left.
-- **Edges and zones used by at least one drone glow**, unused ones stay dim, so
-  the routes chosen by the algorithm stand out from the rest of the network.
-- **Each drone is a glowing orb with its own color and a fading trail**, moving
-  smoothly between zones (48 frames per turn). A drone flying toward a
-  `restricted` zone is drawn halfway along the connection, matching the text
-  output.
-- A **pulse ring** appears in a zone each time a drone arrives.
-- The **HUD** shows `TOUR n / total`, a progress bar and the number of drones,
-  and displays `ARRIVEE` once every drone is delivered.
-- **Hovering a zone** shows its name; start and end are always labeled.
-- Before the animation, the same plan is printed in the terminal in the format
-  required by the subject, so the graphical and text outputs can be compared.
-
-The title screen and the map selection screen follow the same visual identity.
-
-## Project structure
-
-```text
-.
-├── main.py            # entry point: parsing, simulation, graphical rendering
-├── parser.py          # MapParser, Zone, Connection, ParsedMap, MapParsingError
-├── algo.py            # Graph, registries, TimeAwarePathFinder, Drone, Simulator
-├── title_screen.py    # title screen
-├── map_select.py      # map selection screen (scans maps/)
-├── maps/              # maps grouped by category (easy, medium, hard, challenger)
-├── docs/screenshot.png
-├── Makefile
-└── README.md
-```
+(the exact routes and turn count depend on the map's own capacities and
+the number of drones; this snippet only illustrates the *format*.)
 
 ## Resources
 
-### References
+- Dijkstra's algorithm: https://youtu.be/rHylCtXtdNs?si=bM3PfGSC79w3O2Wl and https://www.geeksforgeeks.org/python/python-program-for-dijkstras-shortest-path-algorithm-greedy-algo-7/
+- raylib tutorial: https://youtu.be/UoAsDlUwjy0?si=Nor58-gEOTOoVNgM
+- raylib documentation: https://pypi.org/project/raylib/
+- Python: https://www.python.org/
 
-- Dijkstra, E. W., *A note on two problems in connexion with graphs* (1959).
-- Erdmann, M. and Lozano-Perez, T., *On multiple moving objects*, Algorithmica
-  (1987): origin of prioritized planning.
-- Silver, D., *Cooperative Pathfinding*, AIIDE (2005): searching in
-  space-time with reservation tables.
-- Sharon, G. et al., *Conflict-based search for optimal multi-agent
-  pathfinding*, Artificial Intelligence (2015).
-- Stern, R. et al., *Multi-Agent Pathfinding: Definitions, Variants, and
-  Benchmarks*, SoCS (2019).
-- Python documentation: <https://docs.python.org/3/> (`heapq`, `collections`,
-  `typing`).
-- raylib and its Python bindings: <https://www.raylib.com/>.
-- PEP 8, PEP 257, flake8 and mypy documentation.
 
-### Use of AI
+**AI usage:** An AI assistant was used for several distinct tasks during this project:
 
-AI (Claude, by Anthropic) was used during this project for:
-
-- **Code review** of the whole project against the subject, which found rule
-  violations in the first version of the planner (capacity of the end zone,
-  occupation of waiting zones, connection reservation during multi-turn moves,
-  connection naming, fixed turn limit, ignored `priority` zones);
-- **`algo.py`**: rewriting the reservation system and the search to fix those
-  issues, and adding docstrings and type hints;
-- **`parser.py`**: hardening the validation so that every invalid input raises a
-  `MapParsingError` with a line number;
-- **`main.py`**: error handling, terminal output, drones in flight and zone
-  types on screen;
-- **a standalone validator** (not part of this repository) that replays the
-  output and checks every occupancy, capacity and cost rule; it was run on the
-  subject example, hand-written maps and 800 random maps;
-- **this README and the Makefile**.
-
-[TO COMPLETE: describe any other use of AI, for example for the graphical
-screens, and what you reviewed, rewrote or tested yourself.]
+- **Writing test/debug** helpers to exercise the parser and the pathfinder without having to write throwaway scripts by hand each time.
+- **Helping install and get started** with raylib (the pyray Python bindings), including troubleshooting the initial setup.
+- **Explaining complex** parts of the subject in plainer terms — turn mechanics, zone-occupancy rules, and the exact capacity exemptions for start_hub/end_hub.
+- **Brainstorming visualization ideas** for the graphical interface (the glowing-orb renderer, the title screen, the map browser) before settling on the final look.

@@ -1,11 +1,30 @@
 import os
-from pyray import *
+from pyray import (
+    Color,
+    ConfigFlags,
+    MouseButton,
+    begin_drawing,
+    clear_background,
+    close_window,
+    draw_rectangle,
+    draw_text,
+    end_drawing,
+    get_frame_time,
+    get_mouse_position,
+    get_screen_height,
+    get_screen_width,
+    init_window,
+    is_mouse_button_pressed,
+    set_config_flags,
+    set_target_fps,
+    window_should_close,
+)
 from title_screen import Button, Renderer, Colors
 
 
 class MapManager:
     CATEGORY_ORDER = ["easy", "medium", "hard", "challenger"]
-    
+
     @staticmethod
     def get_category_color(cat: str) -> Color:
         colors = {
@@ -18,7 +37,7 @@ class MapManager:
 
     @classmethod
     def scan_maps(cls, maps_root: str = "maps") -> dict[str, list[str]]:
-        categories = {}
+        categories: dict[str, list[str]] = {}
         if not os.path.isdir(maps_root):
             return categories
 
@@ -26,7 +45,9 @@ class MapManager:
             cat_path = os.path.join(maps_root, entry)
             if not os.path.isdir(cat_path):
                 continue
-            files = sorted(f for f in os.listdir(cat_path) if f.endswith(".txt"))
+            files = sorted(
+                f for f in os.listdir(cat_path) if f.endswith(".txt")
+            )
             if files:
                 categories[entry] = [os.path.join(cat_path, f) for f in files]
 
@@ -42,24 +63,26 @@ class MapManager:
 
 
 class MapSelectScene:
-    def __init__(self, maps_root: str = "maps"):
+    def __init__(self, maps_root: str = "maps") -> None:
         self.maps_root = maps_root
         self.screen_w = get_screen_width()
         self.screen_h = get_screen_height()
-        self.headers = []
-        self.entries = []
-        
+        self.headers: list[tuple[str, int, int, Color]] = []
+        self.entries: list[tuple[Button, str]] = []
+
         self._setup_layout()
 
     def _setup_layout(self) -> None:
         categories = MapManager.scan_maps(self.maps_root)
         cat_names = [c for c in MapManager.CATEGORY_ORDER if c in categories]
-        cat_names += sorted(c for c in categories if c not in MapManager.CATEGORY_ORDER)
+        cat_names += sorted(
+            c for c in categories if c not in MapManager.CATEGORY_ORDER
+        )
 
         col_w = 250
         gap_x = 26
         total_w = len(cat_names) * col_w + max(0, len(cat_names) - 1) * gap_x
-        
+
         self.start_x = max(60, (self.screen_w - total_w) // 2)
         top_y = 190
         btn_h = 38
@@ -73,7 +96,8 @@ class MapSelectScene:
             for j, path in enumerate(categories[cat]):
                 label = MapManager.format_map_name(os.path.basename(path))
                 by = top_y + 38 + j * (btn_h + btn_gap)
-                self.entries.append((Button(label, cx, by, col_w, btn_h, accent=color), path))
+                btn = Button(label, cx, by, col_w, btn_h, accent=color)
+                self.entries.append((btn, path))
 
     def update(self, dt: float) -> str | None:
         mouse = get_mouse_position()
@@ -93,7 +117,10 @@ class MapSelectScene:
         title = "CHOISIS UNE CARTE"
         Renderer.draw_text_spaced(title, self.start_x, 70, 30, Colors.TEXT, 4)
         sub = "clique une carte pour lancer la simulation"
-        Renderer.draw_text_spaced(sub, self.start_x + 2, 108, 11, Renderer.with_alpha(Colors.MUTED, 220), 3)
+        Renderer.draw_text_spaced(
+            sub, self.start_x + 2, 108, 11,
+            Renderer.with_alpha(Colors.MUTED, 220), 3,
+        )
 
         for text, hx, hy, color in self.headers:
             draw_rectangle(int(hx), int(hy) - 2, 3, 16, color)
@@ -104,7 +131,10 @@ class MapSelectScene:
 
         if not self.entries:
             msg = f"aucune carte trouvée dans '{self.maps_root}/'"
-            Renderer.draw_text(msg, self.start_x, 210, 14, Renderer.with_alpha(Colors.MUTED, 220))
+            draw_text(
+                msg, self.start_x, 210, 14,
+                Renderer.with_alpha(Colors.MUTED, 220),
+            )
 
         end_drawing()
 

@@ -6,10 +6,8 @@ from typing import Optional
 
 from parser import Connection, MapParser, MapParsingError, ParsedMap, Zone
 
-# Un etat = (tour, zone) : "le drone est dans `zone` a la fin du `tour`".
 State = tuple[int, str]
 
-# Start et end n'ont pas de limite de capacite (sujet, section VII.4)
 UNLIMITED = 10**9
 
 

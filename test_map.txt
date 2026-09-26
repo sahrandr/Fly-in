@@ -1,7 +1,0 @@
-nb_drones: 3
-
-start_hub: start 0 0 [color=green]
-end_hub: goal 2 0 [color=gold]
-
-connection: start-fantome
-connection: fantome-goal
