@@ -64,50 +64,61 @@ space-separated), followed by the total turn count.
 ### Time-expanded search, one drone at a time
 
 Each drone is planned in order (`D1`, `D2`, ...) against a **shared**
-pair of registries — `OccupationRegistry` (per-zone, per-turn drone
+pair of registries: `OccupationRegistry` (per-zone, per-turn drone
 counts) and `LinkOccupationRegistry` (per-connection, per-turn drone
 counts). A drone's path is *not* computed on the plain zone graph:
-states are `(turn, zone)` pairs, so the search naturally reasons about
-*when* a zone or connection is free, not just *whether* it's reachable.
+states are `(turn, zone)` pairs, so the search reasons about *when* a
+zone or connection is free, not just whether it is reachable.
 At every state, two actions are considered:
 
-- **wait** one turn in place (always legal, cost 1) — this is how the
-  algorithm expresses "strategic waiting when movement is not possible",
-  required by the subject (VII.1).
-- **advance** to a neighboring zone, only if both the destination zone
-  and the connection have spare capacity at the arrival turn. A move
-  into a `restricted` zone costs 2 turns and is registered on both
-  transit turns, matching the subject's rule that the drone occupies
-  the connection for the whole transit and cannot idle on it midway.
+- **wait** one turn in place, only if the zone still has room at the
+  next turn. This is how the algorithm expresses "strategic waiting
+  when movement is not possible" (subject VII.1).
+- **advance** to a neighboring zone, only if the destination zone has
+  room at the arrival turn and the connection has room on every transit
+  turn. A move into a `restricted` zone costs 2 turns and reserves the
+  connection for both of them, matching the rule that the drone
+  occupies the connection for the whole transit.
 
 Because later drones see every reservation made by earlier ones, the
-overall schedule is conflict-free by construction — no separate
-deadlock-detection pass is needed, avoiding a conflict is built into
-what counts as a legal move.
+schedule is conflict-free by construction: no separate deadlock
+detection is needed. The start and end zones have unlimited capacity.
 
-### A* with an admissible heuristic
+### Dijkstra over (turn, zone)
 
-The search is ordered by `f = g + h`, where `g` is the real cost so far
-(in turns) and `h` is the hop-count distance to the end zone (an
-unweighted BFS computed once per drone). Since every real move costs at
-least 1 turn, `h` never overestimates the true remaining cost, so the
-search stays optimal while exploring far fewer states than plain
-Dijkstra — this matters most on the larger maps (12–25 drones), where
-the state space (`turn` × `zone`) grows quickly.
+The cost of a state is its turn number, and every move costs 1 turn
+(2 for `restricted`), so a Dijkstra search returns the fastest
+arrival for the current drone, given the reservations already made.
+The priority queue is ordered by this tuple, compared in order:
 
-Three tie-breakers apply, in order, when two states share the same
-`f`-score:
+1. **turn**: the Dijkstra cost.
+2. **priority penalty**: the number of non-`priority` zones entered so
+   far. Among equally fast paths, the one crossing the most `priority`
+   zones wins, as the subject requires.
+3. **BFS distance** to the end zone (see below).
+4. **load**: drone-turns already registered on the destination zone
+   and the link, which spreads traffic over parallel routes.
+5. **insertion counter**: keeps the heap ordering deterministic.
 
-1. **Priority-zone preference** — the subject requires that `priority`
-   zones be preferred even though they cost the same as `normal` zones
-   (1 turn). A zone of type `priority` wins ties over any other type.
-2. **Load balancing** — among equally good options, the search prefers
-   the zone/connection used least so far by previous drones, spreading
-   traffic across parallel routes instead of always taking the first
-   one found.
-3. **Insertion order** — a monotonically increasing counter, purely to
-   keep the underlying heap's ordering deterministic.
+The search stops when the end zone is popped, or fails with a
+`SimulationError` if the turn horizon
+(`2 x zones x (drones + 1)`) is exceeded.
 
+### BFS as a tie-breaker
+
+An unweighted BFS from the end zone gives each zone its hop distance
+to the goal. It is computed once per target and cached in `Graph`.
+It is **not** added to the cost (this is not A*): it only orders states
+that already share the same turn and the same priority penalty,
+preferring the one closer to the goal. Unreachable zones get a
+distance worse than any reachable one, instead of raising a `KeyError`.
+
+### Optimality
+
+Each drone gets a fastest path *given the earlier reservations*. Since
+drones are planned greedily in order, the global schedule is not
+guaranteed to be optimal.
+ 
 ### Correctness details worth flagging
 
 - **Start and end zones have no capacity limit**, per the subject
@@ -208,6 +219,7 @@ the number of drones; this snippet only illustrates the *format*.)
 - raylib tutorial: https://youtu.be/UoAsDlUwjy0?si=Nor58-gEOTOoVNgM
 - raylib documentation: https://pypi.org/project/raylib/
 - Python: https://www.python.org/
+- BFS : https://www.datacamp.com/tutorial/breadth-first-search-in-python
 
 
 **AI usage:** An AI assistant was used for several distinct tasks during this project:

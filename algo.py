@@ -1,10 +1,12 @@
+"""Pathfinding and turn-by-turn simulation of drones on a zone network."""
+
 import heapq
 import itertools
 import sys
 from collections import deque
 from typing import Optional
 
-from parser import Connection, MapParser, MapParsingError, ParsedMap, Zone
+from parser import Connection, MapParser, ParsedMap, Zone
 
 State = tuple[int, str]
 
@@ -12,11 +14,11 @@ UNLIMITED = 10**9
 
 
 class SimulationError(Exception):
-    """Erreur survenue lors du pathfinding ou de la simulation."""
+    """Error raised during pathfinding or simulation."""
 
 
 class Graph:
-    """Graphe des zones, sans les zones blocked."""
+    """Graph of zones, excluding blocked ones."""
 
     def __init__(
         self,
@@ -25,11 +27,18 @@ class Graph:
         start: str,
         end: str,
     ) -> None:
+        """Build the graph and its adjacency list.
+
+        Args:
+            zones: All zones of the map, indexed by name.
+            connections: All bidirectional connections of the map.
+            start: Name of the start zone.
+            end: Name of the end zone.
+        """
         self.zones = zones
         self.connections = connections
         self.start = start
         self.end = end
-        # Acces O(1) a une connexion, quel que soit le sens
         self._conn: dict[frozenset[str], Connection] = {
             frozenset((c.zone_a, c.zone_b)): c for c in connections
         }
@@ -37,40 +46,78 @@ class Graph:
         self._dist_cache: dict[str, dict[str, int]] = {}
 
     def _build_adjacency(self) -> dict[str, list[str]]:
-        """Liste d'adjacence ; toute connexion touchant une zone blocked
+        """Build the adjacency list, ignoring blocked zones.
 
-        est ignoree (aucun chemin ne peut la traverser).
+        Any connection touching a blocked zone is skipped, since no
+        path can go through it.
+
+        Returns:
+            A mapping from each zone name to its reachable neighbors.
         """
         adjacency: dict[str, list[str]] = {name: [] for name in self.zones}
         for conn in self.connections:
-            a_bloquee = self.zones[conn.zone_a].zone_type == "blocked"
-            b_bloquee = self.zones[conn.zone_b].zone_type == "blocked"
-            if not a_bloquee and not b_bloquee:
+            a_blocked = self.zones[conn.zone_a].zone_type == "blocked"
+            b_blocked = self.zones[conn.zone_b].zone_type == "blocked"
+            if not a_blocked and not b_blocked:
                 adjacency[conn.zone_a].append(conn.zone_b)
                 adjacency[conn.zone_b].append(conn.zone_a)
         return adjacency
 
     def zone_cost(self, zone_name: str) -> int:
-        """Cout en tours pour ENTRER dans la zone (restricted = 2)."""
+        """Return the number of turns needed to ENTER a zone.
+
+        Args:
+            zone_name: Name of the zone to enter.
+
+        Returns:
+            2 for a restricted zone, 1 otherwise.
+        """
         if self.zones[zone_name].zone_type == "restricted":
             return 2
         return 1
 
     def zone_capacity(self, zone_name: str) -> int:
-        """Nombre max de drones simultanes ; illimite pour start/end."""
+        """Return the maximum number of simultaneous drones in a zone.
+
+        Args:
+            zone_name: Name of the zone.
+
+        Returns:
+            ``UNLIMITED`` for the start and end zones, otherwise the
+            zone's ``max_drones`` value.
+        """
         if zone_name in (self.start, self.end):
             return UNLIMITED
         return self.zones[zone_name].max_drones
 
     def find_connection(self, zone_a: str, zone_b: str) -> Connection:
-        """Connexion entre deux zones (O(1))."""
+        """Return the connection between two zones in O(1).
+
+        Args:
+            zone_a: Name of the first zone.
+            zone_b: Name of the second zone.
+
+        Returns:
+            The ``Connection`` linking the two zones.
+
+        Raises:
+            KeyError: If the two zones are not directly connected.
+        """
         return self._conn[frozenset((zone_a, zone_b))]
 
     def distances_to(self, target: str) -> dict[str, int]:
-        """BFS non pondere depuis `target` (mis en cache).
+        """Compute unweighted BFS distances from ``target`` (cached).
 
-        Sert uniquement a departager des etats de meme cout : a cout
-        egal, on prefere celui qui rapproche du but.
+        Only used as a tie-breaker between states of equal cost: the
+        one closer to the goal is preferred.
+
+        Args:
+            target: Zone from which distances are computed.
+
+        Returns:
+            A mapping from each zone name to its distance to
+            ``target``. Unreachable zones get a value worse than any
+            reachable one, rather than being missing.
         """
         if target in self._dist_cache:
             return self._dist_cache[target]
@@ -84,71 +131,117 @@ class Graph:
                     dist[neighbor] = dist[current] + 1
                     queue.append(neighbor)
 
-        # Zone inatteignable : "pire que tout" plutot qu'un KeyError
-        pire = max(dist.values(), default=0) + 1
+        worst = max(dist.values(), default=0) + 1
         for zone_name in self.zones:
-            dist.setdefault(zone_name, pire)
+            dist.setdefault(zone_name, worst)
 
         self._dist_cache[target] = dist
         return dist
 
 
 class OccupationRegistry:
-    """Nombre de drones presents dans chaque zone, tour par tour."""
+    """Number of drones present in each zone, turn by turn."""
 
     def __init__(self) -> None:
+        """Create an empty registry."""
         self._occupation: dict[str, dict[int, int]] = {}
 
-    def register(self, zone_name: str, tour: int) -> None:
-        """Ajoute un drone dans `zone_name` a la fin du `tour`."""
-        par_tour = self._occupation.setdefault(zone_name, {})
-        par_tour[tour] = par_tour.get(tour, 0) + 1
+    def register(self, zone_name: str, turn: int) -> None:
+        """Add one drone to a zone at the end of a turn.
+
+        Args:
+            zone_name: Name of the zone occupied.
+            turn: Turn number at which the drone is present.
+        """
+        per_turn = self._occupation.setdefault(zone_name, {})
+        per_turn[turn] = per_turn.get(turn, 0) + 1
 
     def is_available(
-        self, zone_name: str, tour: int, max_capacity: int
+        self, zone_name: str, turn: int, max_capacity: int
     ) -> bool:
-        """Vrai s'il reste de la place dans la zone a ce tour."""
-        return self._occupation.get(zone_name, {}).get(tour, 0) < max_capacity
+        """Tell whether a zone still has room at a given turn.
+
+        Args:
+            zone_name: Name of the zone.
+            turn: Turn number to check.
+            max_capacity: Maximum number of simultaneous drones.
+
+        Returns:
+            ``True`` if the zone is below its capacity at that turn.
+        """
+        return self._occupation.get(zone_name, {}).get(turn, 0) < max_capacity
 
     def total_count(self, zone_name: str) -> int:
-        """Charge globale de la zone (tous tours confondus)."""
+        """Return the overall load of a zone, all turns combined.
+
+        Args:
+            zone_name: Name of the zone.
+
+        Returns:
+            The total number of drone-turns registered in the zone.
+        """
         return sum(self._occupation.get(zone_name, {}).values())
 
 
 class LinkOccupationRegistry:
-    """Nombre de drones sur chaque connexion, tour par tour."""
+    """Number of drones on each connection, turn by turn."""
 
     def __init__(self) -> None:
+        """Create an empty registry."""
         self._occupation: dict[frozenset[str], dict[int, int]] = {}
 
-    def register(self, zone_a: str, zone_b: str, tour: int) -> None:
-        """Ajoute un drone sur la connexion pendant ce tour."""
-        par_tour = self._occupation.setdefault(
+    def register(self, zone_a: str, zone_b: str, turn: int) -> None:
+        """Add one drone to a connection during a turn.
+
+        Args:
+            zone_a: One end of the connection.
+            zone_b: The other end of the connection.
+            turn: Turn number during which the link is used.
+        """
+        per_turn = self._occupation.setdefault(
             frozenset((zone_a, zone_b)), {}
         )
-        par_tour[tour] = par_tour.get(tour, 0) + 1
+        per_turn[turn] = per_turn.get(turn, 0) + 1
 
     def is_available(
-        self, zone_a: str, zone_b: str, tour: int, max_capacity: int
+        self, zone_a: str, zone_b: str, turn: int, max_capacity: int
     ) -> bool:
-        """Vrai s'il reste de la place sur la connexion a ce tour."""
-        par_tour = self._occupation.get(frozenset((zone_a, zone_b)), {})
-        return par_tour.get(tour, 0) < max_capacity
+        """Tell whether a connection still has room at a given turn.
+
+        Args:
+            zone_a: One end of the connection.
+            zone_b: The other end of the connection.
+            turn: Turn number to check.
+            max_capacity: Maximum number of simultaneous drones.
+
+        Returns:
+            ``True`` if the link is below its capacity at that turn.
+        """
+        per_turn = self._occupation.get(frozenset((zone_a, zone_b)), {})
+        return per_turn.get(turn, 0) < max_capacity
 
     def total_count(self, zone_a: str, zone_b: str) -> int:
-        """Charge globale de la connexion (tous tours confondus)."""
-        par_tour = self._occupation.get(frozenset((zone_a, zone_b)), {})
-        return sum(par_tour.values())
+        """Return the overall load of a connection, all turns combined.
+
+        Args:
+            zone_a: One end of the connection.
+            zone_b: The other end of the connection.
+
+        Returns:
+            The total number of drone-turns registered on the link.
+        """
+        per_turn = self._occupation.get(frozenset((zone_a, zone_b)), {})
+        return sum(per_turn.values())
 
 
-# (tour, penalite_priority, distance_au_but, charge, compteur, zone)
 QueueItem = tuple[int, int, int, int, int, str]
 
 
 class TimeAwarePathFinder:
-    """Dijkstra sur l'espace (tour, zone), en tenant compte des
+    """Dijkstra over the (turn, zone) space.
 
-    reservations deja faites par les drones precedents.
+    Takes into account the reservations already made by previous
+    drones.
     """
 
     def __init__(
@@ -158,20 +251,40 @@ class TimeAwarePathFinder:
         link_occupation: LinkOccupationRegistry,
         horizon: int,
     ) -> None:
+        """Initialize the pathfinder.
+
+        Args:
+            graph: The zone graph to search.
+            occupation: Zone reservations made by earlier drones.
+            link_occupation: Connection reservations made by earlier
+                drones.
+            horizon: Maximum turn explored (safety guard).
+        """
         self.graph = graph
         self.occupation = occupation
         self.link_occupation = link_occupation
-        self.horizon = horizon  # Tour max explore (garde-fou)
+        self.horizon = horizon
         self._counter = itertools.count()
 
     def find_path(self, start: str, end: str) -> list[State]:
-        """Chemin le plus rapide de `start` a `end`.
+        """Find the fastest path from ``start`` to ``end``.
 
-        Retourne TOUS les etats traverses, attentes comprises :
-        [(0, 's'), (1, 's'), (2, 'a'), (3, 'g')].
-        Le cout d'un etat est son tour ; a tour egal on prefere
-        (1) plus de zones priority, (2) etat proche du but,
-        (3) route la moins chargee.
+        Returns ALL traversed states, waits included, for example
+        ``[(0, 's'), (1, 's'), (2, 'a'), (3, 'g')]``. The cost of a
+        state is its turn; at equal turn, the preference goes to
+        (1) more priority zones, (2) a state closer to the goal,
+        (3) the least loaded route.
+
+        Args:
+            start: Name of the start zone.
+            end: Name of the end zone.
+
+        Returns:
+            The ordered list of ``(turn, zone)`` states.
+
+        Raises:
+            SimulationError: If no path is available within the
+                horizon.
         """
         graph = self.graph
         dist_to_goal = graph.distances_to(end)
@@ -184,45 +297,40 @@ class TimeAwarePathFinder:
         ]
 
         while queue:
-            tour, pen, _dist, _charge, _n, zone = heapq.heappop(queue)
-            state: State = (tour, zone)
+            turn, pen, _dist, _load, _n, zone = heapq.heappop(queue)
+            state: State = (turn, zone)
 
             if pen > best_pen.get(state, 10**9):
-                continue  # Entree obsolete
+                continue
 
             if zone == end:
                 return self._reconstruct(previous, state)
 
-            if tour >= self.horizon:
+            if turn >= self.horizon:
                 continue
 
-            # ACTION 1 : attendre. Ce n'est permis que si la zone reste
-            # disponible au tour suivant (un autre drone peut y arriver).
             if self.occupation.is_available(
-                zone, tour + 1, graph.zone_capacity(zone)
+                zone, turn + 1, graph.zone_capacity(zone)
             ):
                 self._relax(
                     queue,
                     best_pen,
                     previous,
                     state,
-                    (tour + 1, zone),
+                    (turn + 1, zone),
                     pen,
                     dist_to_goal[zone],
                     0,
                 )
 
-            # ACTION 2 : avancer vers un voisin
             for neighbor in graph.adjacency[zone]:
-                arrival = tour + graph.zone_cost(neighbor)
+                arrival = turn + graph.zone_cost(neighbor)
 
                 if not self.occupation.is_available(
                     neighbor, arrival, graph.zone_capacity(neighbor)
                 ):
                     continue
 
-                # Le lien est occupe pendant TOUTE la traversee
-                # (1 tour normal, 2 tours vers une zone restricted)
                 link_cap = graph.find_connection(
                     zone, neighbor
                 ).max_link_capacity
@@ -230,13 +338,13 @@ class TimeAwarePathFinder:
                     self.link_occupation.is_available(
                         zone, neighbor, t, link_cap
                     )
-                    for t in range(tour + 1, arrival + 1)
+                    for t in range(turn + 1, arrival + 1)
                 ):
                     continue
 
                 is_priority = graph.zones[neighbor].zone_type == "priority"
                 new_pen = pen + (0 if is_priority else 1)
-                charge = self.occupation.total_count(
+                load = self.occupation.total_count(
                     neighbor
                 ) + self.link_occupation.total_count(zone, neighbor)
                 self._relax(
@@ -247,7 +355,7 @@ class TimeAwarePathFinder:
                     (arrival, neighbor),
                     new_pen,
                     dist_to_goal[neighbor],
-                    charge,
+                    load,
                 )
 
         raise SimulationError(
@@ -263,11 +371,19 @@ class TimeAwarePathFinder:
         target: State,
         pen: int,
         dist: int,
-        charge: int,
+        load: int,
     ) -> None:
-        """Enregistre `target` s'il est atteint avec une meilleure
+        """Record ``target`` if reached with a better penalty so far.
 
-        penalite que jusqu'ici.
+        Args:
+            queue: The priority queue to push the new state into.
+            best_pen: Best penalty known for each state.
+            previous: Predecessor of each state, for path rebuilding.
+            source: State the move comes from.
+            target: State the move leads to.
+            pen: Priority penalty accumulated to reach ``target``.
+            dist: Distance from ``target`` to the goal.
+            load: Load of the route used to reach ``target``.
         """
         if pen < best_pen.get(target, 10**9):
             best_pen[target] = pen
@@ -278,7 +394,7 @@ class TimeAwarePathFinder:
                     target[0],
                     pen,
                     dist,
-                    charge,
+                    load,
                     next(self._counter),
                     target[1],
                 ),
@@ -288,7 +404,15 @@ class TimeAwarePathFinder:
     def _reconstruct(
         previous: dict[State, Optional[State]], end_state: State
     ) -> list[State]:
-        """Remonte `previous` et retourne les etats dans l'ordre."""
+        """Walk back through ``previous`` and return the ordered path.
+
+        Args:
+            previous: Predecessor of each state.
+            end_state: Final state of the path.
+
+        Returns:
+            The states from the initial one to ``end_state``.
+        """
         path: list[State] = []
         state: Optional[State] = end_state
         while state is not None:
@@ -299,9 +423,14 @@ class TimeAwarePathFinder:
 
 
 class Drone:
-    """Un drone : son chemin (etats) et ses evenements d'affichage."""
+    """A drone: its path (states) and its display events."""
 
     def __init__(self, drone_id: str) -> None:
+        """Create a drone with an empty path.
+
+        Args:
+            drone_id: Identifier of the drone, such as ``"D1"``.
+        """
         self.drone_id = drone_id
         self.states: list[State] = []
         self.events: list[tuple[int, str]] = []
@@ -314,35 +443,51 @@ class Drone:
         occupation: OccupationRegistry,
         link_occupation: LinkOccupationRegistry,
     ) -> None:
-        """Calcule le chemin puis reserve zones et connexions."""
+        """Compute the drone's path, then reserve zones and links.
+
+        Args:
+            pathfinder: Pathfinder used to compute the route.
+            start: Name of the start zone.
+            end: Name of the end zone.
+            occupation: Registry in which zone usage is recorded.
+            link_occupation: Registry in which link usage is recorded.
+
+        Raises:
+            SimulationError: If no path can be found.
+        """
         self.states = pathfinder.find_path(start, end)
         self.events = []
 
-        # Chaque etat = 1 tour passe dans une zone (attentes comprises)
-        for tour, zone in self.states:
-            occupation.register(zone, tour)
+        for turn, zone in self.states:
+            occupation.register(zone, turn)
 
         for i in range(1, len(self.states)):
-            tour_prec, zone_prec = self.states[i - 1]
-            tour_act, zone_act = self.states[i]
+            prev_turn, prev_zone = self.states[i - 1]
+            cur_turn, cur_zone = self.states[i]
 
-            if zone_act == zone_prec:
-                continue  # Attente : rien a afficher
+            if cur_zone == prev_zone:
+                continue
 
-            # Le drone est sur la connexion pendant tout le trajet
-            for tour in range(tour_prec + 1, tour_act + 1):
-                link_occupation.register(zone_prec, zone_act, tour)
+            for turn in range(prev_turn + 1, cur_turn + 1):
+                link_occupation.register(prev_zone, cur_zone, turn)
 
-            if tour_act - tour_prec == 2:
-                # Zone restricted : 1er tour en vol sur la connexion
-                self.events.append((tour_act - 1, f"{zone_prec}-{zone_act}"))
-            self.events.append((tour_act, zone_act))
+            if cur_turn - prev_turn == 2:
+                self.events.append((cur_turn - 1, f"{prev_zone}-{cur_zone}"))
+            self.events.append((cur_turn, cur_zone))
 
 
 class Simulator:
-    """Planifie les drones un par un et produit la sortie par tour."""
+    """Plan drones one by one and produce the per-turn output."""
 
     def __init__(self, parsed_map: ParsedMap) -> None:
+        """Set up the graph, the registries and the pathfinder.
+
+        Args:
+            parsed_map: The validated map to simulate.
+
+        Raises:
+            SimulationError: If the map has no start or end zone.
+        """
         if parsed_map.start_zone is None or parsed_map.end_zone is None:
             raise SimulationError(
                 "Start or end zone is missing from parsed map."
@@ -358,7 +503,6 @@ class Simulator:
         self.occupation = OccupationRegistry()
         self.link_occupation = LinkOccupationRegistry()
 
-        # Borne large pour le temps d'attente max
         horizon = 2 * len(parsed_map.zones) * (parsed_map.nb_drones + 1)
         self.pathfinder = TimeAwarePathFinder(
             self.graph, self.occupation, self.link_occupation, horizon
@@ -366,7 +510,15 @@ class Simulator:
         self.drones: list[Drone] = []
 
     def run(self) -> dict[int, list[tuple[str, str]]]:
-        """Planifie tous les drones ; retourne {tour: [(drone, dest)]}."""
+        """Plan every drone and return the moves grouped by turn.
+
+        Returns:
+            A mapping ``{turn: [(drone_id, destination), ...]}``.
+
+        Raises:
+            SimulationError: If the start or end zone is missing, or
+                if a drone cannot find a path.
+        """
         start = self.parsed_map.start_zone
         end = self.parsed_map.end_zone
 
@@ -375,8 +527,8 @@ class Simulator:
                 "Start or end zone is missing from parsed map."
             )
 
-        for numero in range(1, self.parsed_map.nb_drones + 1):
-            drone = Drone(f"D{numero}")
+        for number in range(1, self.parsed_map.nb_drones + 1):
+            drone = Drone(f"D{number}")
             drone.plan(
                 self.pathfinder,
                 start,
@@ -386,54 +538,50 @@ class Simulator:
             )
             self.drones.append(drone)
 
-        return self._organiser_par_tour()
+        return self._group_by_turn()
 
-    def _organiser_par_tour(self) -> dict[int, list[tuple[str, str]]]:
-        """Regroupe les evenements de tous les drones par tour."""
-        par_tour: dict[int, list[tuple[str, str]]] = {}
+    def _group_by_turn(self) -> dict[int, list[tuple[str, str]]]:
+        """Group the events of all drones by turn.
+
+        Returns:
+            A mapping ``{turn: [(drone_id, destination), ...]}``.
+        """
+        by_turn: dict[int, list[tuple[str, str]]] = {}
         for drone in self.drones:
-            for tour, destination in drone.events:
-                par_tour.setdefault(tour, []).append(
+            for turn, destination in drone.events:
+                by_turn.setdefault(turn, []).append(
                     (drone.drone_id, destination)
                 )
-        return par_tour
+        return by_turn
 
-    def display(self, par_tour: dict[int, list[tuple[str, str]]]) -> None:
-        """Affiche une ligne par tour : `D1-roof1 D2-goal`."""
-        for tour in range(1, max(par_tour, default=0) + 1):
-            morceaux = [
+    def display(self, by_turn: dict[int, list[tuple[str, str]]]) -> None:
+        """Print one line per turn, such as ``D1-roof1 D2-goal``.
+
+        Args:
+            by_turn: Moves grouped by turn, as returned by ``run``.
+        """
+        for turn in range(1, max(by_turn, default=0) + 1):
+            parts = [
                 f"{drone_id}-{dest}"
-                for drone_id, dest in par_tour.get(tour, [])
+                for drone_id, dest in by_turn.get(turn, [])
             ]
-            print(" ".join(morceaux))
+            print(" ".join(parts))
 
 
 def main() -> None:
-    """Point d'entree principal executant le parsing et la simulation."""
+    """Parse the map given on the command line and run the simulation."""
     if len(sys.argv) < 2:
         print("Usage: python algo.py <map_filepath>", file=sys.stderr)
         sys.exit(1)
-
     filepath = sys.argv[1]
 
-    try:
-        parser = MapParser(filepath)
-        parsed_map = parser.parse()
+    parser = MapParser(filepath)
+    parsed_map = parser.parse()
 
-        simulator = Simulator(parsed_map)
-        resultats_par_tour = simulator.run()
+    simulator = Simulator(parsed_map)
+    result_by_turn = simulator.run()
 
-        simulator.display(resultats_par_tour)
-
-    except MapParsingError as e:
-        print(f"Parsing Error: {e}", file=sys.stderr)
-        sys.exit(1)
-    except SimulationError as e:
-        print(f"Simulation Error: {e}", file=sys.stderr)
-        sys.exit(1)
-    except Exception as e:
-        print(f"Unexpected Error: {e}", file=sys.stderr)
-        sys.exit(1)
+    simulator.display(result_by_turn)
 
 
 if __name__ == "__main__":

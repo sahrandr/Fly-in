@@ -1,3 +1,5 @@
+"""Shared UI building blocks: colors, drawing helpers, button, preview."""
+
 from typing import Any, Dict, List, Optional, Tuple
 
 from pyray import (

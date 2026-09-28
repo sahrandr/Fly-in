@@ -1,3 +1,6 @@
+"""Entry point of Fly-in: window, main loop and scene management."""
+
+import sys
 from typing import Any, Optional
 
 from pyray import (
@@ -5,7 +8,6 @@ from pyray import (
     begin_drawing,
     clear_background,
     close_window,
-    draw_line,
     end_drawing,
     get_frame_time,
     get_screen_height,
@@ -16,16 +18,25 @@ from pyray import (
     window_should_close,
 )
 
+from algo import SimulationError
+from parser import MapParsingError
 from scenes import TitleScene
-from ui import Colors
+from ui import Colors, Renderer
 
 
 class App:
-    """Point d'entree du jeu: possede la fenetre et la scene active."""
+    """Application entry point: owns the window and the active scene."""
 
     def __init__(
         self, width: int = 0, height: int = 0, title: str = "Fly-in"
     ) -> None:
+        """Open the window and start on the title scene.
+
+        Args:
+            width: Window width in pixels (0 for the screen width).
+            height: Window height in pixels (0 for the screen height).
+            title: Title of the window.
+        """
         set_config_flags(ConfigFlags.FLAG_BORDERLESS_WINDOWED_MODE)
         init_window(width, height, title)
         set_target_fps(60)
@@ -34,15 +45,19 @@ class App:
         self.running = True
 
     def change_scene(self, new_scene: Any) -> None:
-        """Remplace la scene active par `new_scene`."""
+        """Replace the active scene.
+
+        Args:
+            new_scene: The scene to display from now on.
+        """
         self.current_scene = new_scene
 
     def quit(self) -> None:
-        """Demande l'arret de la boucle principale au prochain tour."""
+        """Request the main loop to stop at the next iteration."""
         self.running = False
 
     def run(self) -> None:
-        """Boucle principale: update + dessin jusqu'a fermeture."""
+        """Run the main loop (update, then draw) until the window closes."""
         while self.running and not window_should_close():
             dt = get_frame_time()
 
@@ -52,12 +67,7 @@ class App:
             begin_drawing()
             clear_background(Colors.BG)
 
-            # Dessin de la grille globale
-            sw, sh = get_screen_width(), get_screen_height()
-            for gx in range(0, sw, 40):
-                draw_line(gx, 0, gx, sh, Colors.GRID)
-            for gy in range(0, sh, 40):
-                draw_line(0, gy, sw, gy, Colors.GRID)
+            Renderer.draw_grid(get_screen_width(), get_screen_height())
 
             if self.current_scene:
                 self.current_scene.draw()
@@ -68,5 +78,15 @@ class App:
 
 
 if __name__ == "__main__":
-    app = App()
-    app.run()
+    try:
+        app = App()
+        app.run()
+    except MapParsingError as e:
+        print(f"Parsing Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    except SimulationError as e:
+        print(f"Simulation Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Unexpected Error: {e}", file=sys.stderr)
+        sys.exit(1)

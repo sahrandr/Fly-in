@@ -127,7 +127,12 @@ class TitleScene(Scene):
         self.t0: float = get_time()
 
     def update(self, dt: float, app: AppProtocol) -> None:
-        """Handle input and switch scenes on button clicks."""
+        """Handle input and switch scenes on button clicks.
+
+        Args:
+            dt: Elapsed time in seconds since the last update.
+            app: The owning application (for scene switches / quit).
+        """
         mouse = get_mouse_position()
         pressed = is_mouse_button_pressed(MouseButton.MOUSE_BUTTON_LEFT)
         self.preview.update(dt)
@@ -260,7 +265,12 @@ class MapSelectScene(Scene):
         return name.replace("_", " ").upper()
 
     def update(self, dt: float, app: AppProtocol) -> None:
-        """Switch to the simulation scene when a map is clicked."""
+        """Switch to the simulation scene when a map is clicked.
+
+        Args:
+            dt: Elapsed time in seconds since the last update.
+            app: The owning application, used to change scene.
+        """
         mouse = get_mouse_position()
         pressed = is_mouse_button_pressed(MouseButton.MOUSE_BUTTON_LEFT)
         for btn, path in self.entries:
@@ -309,17 +319,19 @@ class SimulationScene(Scene):
     def __init__(self, map_path: str) -> None:
         """Parse ``map_path`` and run the simulation, then lay it out.
 
+        On a parsing error, prints a message to stderr and exits the
+        process (a deliberate, controlled exit rather than a crash).
+
         Args:
             map_path: Path to the map file to load and simulate.
 
-        On a parsing or simulation error, prints a message to
-        stderr and exits the process (this is a deliberate,
-        controlled exit rather than an unhandled crash).
+        Raises:
+            SystemExit: If the map cannot be parsed.
         """
         try:
             self.parsed: Any = MapParser(map_path).parse()
             self.simulator: Any = Simulator(self.parsed)
-            self.par_tour: Dict[int, List[Tuple[Any, Any]]] = (
+            self.by_turn: Dict[int, List[Tuple[Any, Any]]] = (
                 self.simulator.run()
             )
         except (MapParsingError, ValueError) as err:
@@ -382,7 +394,7 @@ class SimulationScene(Scene):
         )
 
         self.used_nodes: Set[str] = {str(self.start_id)}
-        for moves in self.par_tour.values():
+        for moves in self.by_turn.values():
             for _, dest in moves:
                 self.used_nodes.add(str(dest))
 
@@ -402,9 +414,9 @@ class SimulationScene(Scene):
         }
 
         self.pulses: List[Dict[str, Any]] = []
-        self.tour_sim: int = 0
-        self.max_tours: int = (
-            max(self.par_tour.keys()) if self.par_tour else 0
+        self.sim_turn: int = 0
+        self.max_turns: int = (
+            max(self.by_turn.keys()) if self.by_turn else 0
         )
         self.turn_frames: int = 48
         self.frame_counter: int = 0
@@ -501,12 +513,12 @@ class SimulationScene(Scene):
             self.frame_counter += 1
             if self.frame_counter >= self.turn_frames:
                 self.frame_counter = 0
-                if self.tour_sim < self.max_tours:
-                    self.tour_sim += 1
+                if self.sim_turn < self.max_turns:
+                    self.sim_turn += 1
                     for d in self.drone_ids:
                         self.drone_from[d] = self.drone_to[d]
-                    if self.tour_sim in self.par_tour:
-                        for d, dest in self.par_tour[self.tour_sim]:
+                    if self.sim_turn in self.by_turn:
+                        for d, dest in self.by_turn[self.sim_turn]:
                             self.drone_to[d] = dest
                             p = self.positions.get(dest)
                             if p and dest in self.parsed.zones:
@@ -678,12 +690,12 @@ class SimulationScene(Scene):
 
     def _draw_ui(self) -> None:
         """Draw the turn counter, progress bar, and footer hints."""
-        label = f"TOUR {self.tour_sim:02d} / {self.max_tours}"
+        label = f"TOUR {self.sim_turn:02d} / {self.max_turns}"
         w = Renderer.measure_spaced(label, 18, 3)
         draw_rectangle(24, 26, 3, 24, Colors.PATH)
         Renderer.draw_text_spaced(label, 40, 27, 18, Colors.TEXT, 3)
 
-        prog = self.tour_sim / self.max_tours if self.max_tours else 0
+        prog = self.sim_turn / self.max_turns if self.max_turns else 0
         draw_rectangle(40, 58, int(w), 2, Color(255, 255, 255, 28))
         begin_blend_mode(BlendMode.BLEND_ADDITIVE)
         draw_rectangle(

@@ -1,4 +1,7 @@
+"""Map selection screen: lists the available maps by difficulty."""
+
 import os
+
 from pyray import (
     Color,
     ConfigFlags,
@@ -19,14 +22,26 @@ from pyray import (
     set_target_fps,
     window_should_close,
 )
-from title_screen import Button, Renderer, Colors
+
+from ui import Button, Colors, Renderer
 
 
 class MapManager:
+    """Discover map files and format their display."""
+
     CATEGORY_ORDER = ["easy", "medium", "hard", "challenger"]
 
     @staticmethod
     def get_category_color(cat: str) -> Color:
+        """Return the accent color of a difficulty category.
+
+        Args:
+            cat: Category name, such as ``"easy"`` or ``"hard"``.
+
+        Returns:
+            The category color, or the default path color if the
+            category is unknown.
+        """
         colors = {
             "easy": Colors.START,
             "medium": Colors.GOAL,
@@ -37,6 +52,16 @@ class MapManager:
 
     @classmethod
     def scan_maps(cls, maps_root: str = "maps") -> dict[str, list[str]]:
+        """Find the map files grouped by category folder.
+
+        Args:
+            maps_root: Directory containing one sub-folder per
+                category, each holding ``.txt`` map files.
+
+        Returns:
+            A mapping from category name to the sorted list of map
+            file paths. Empty if ``maps_root`` does not exist.
+        """
         categories: dict[str, list[str]] = {}
         if not os.path.isdir(maps_root):
             return categories
@@ -55,6 +80,14 @@ class MapManager:
 
     @staticmethod
     def format_map_name(filename: str) -> str:
+        """Build a readable label from a map file name.
+
+        Args:
+            filename: File name, such as ``"01_easy_path.txt"``.
+
+        Returns:
+            An upper-case label, such as ``"01 · EASY PATH"``.
+        """
         name = filename[:-4] if filename.endswith(".txt") else filename
         parts = name.split("_", 1)
         if parts[0].isdigit() and len(parts) > 1:
@@ -63,7 +96,14 @@ class MapManager:
 
 
 class MapSelectScene:
+    """Screen letting the player pick a map."""
+
     def __init__(self, maps_root: str = "maps") -> None:
+        """Scan the maps folder and lay out the buttons.
+
+        Args:
+            maps_root: Directory containing the map categories.
+        """
         self.maps_root = maps_root
         self.screen_w = get_screen_width()
         self.screen_h = get_screen_height()
@@ -73,6 +113,7 @@ class MapSelectScene:
         self._setup_layout()
 
     def _setup_layout(self) -> None:
+        """Compute the category headers and the map buttons."""
         categories = MapManager.scan_maps(self.maps_root)
         cat_names = [c for c in MapManager.CATEGORY_ORDER if c in categories]
         cat_names += sorted(
@@ -100,6 +141,15 @@ class MapSelectScene:
                 self.entries.append((btn, path))
 
     def update(self, dt: float) -> str | None:
+        """Handle input for one frame.
+
+        Args:
+            dt: Elapsed time in seconds since the last frame.
+
+        Returns:
+            The path of the clicked map, or ``None`` if no button
+            was clicked.
+        """
         mouse = get_mouse_position()
         pressed = is_mouse_button_pressed(MouseButton.MOUSE_BUTTON_LEFT)
 
@@ -109,6 +159,7 @@ class MapSelectScene:
         return None
 
     def draw(self) -> None:
+        """Render the title, the category headers and the buttons."""
         begin_drawing()
         clear_background(Colors.BG)
 
@@ -139,6 +190,12 @@ class MapSelectScene:
         end_drawing()
 
     def run(self) -> str | None:
+        """Run the selection loop until a map is chosen.
+
+        Returns:
+            The path of the chosen map, or ``None`` if the window was
+            closed without a choice.
+        """
         while not window_should_close():
             dt = get_frame_time()
             chosen_path = self.update(dt)
@@ -154,6 +211,6 @@ if __name__ == "__main__":
     set_target_fps(60)
 
     scene = MapSelectScene()
-    choix = scene.run()
-    print(f"Carte choisie: {choix}")
+    choice = scene.run()
+    print(f"Carte choisie: {choice}")
     close_window()

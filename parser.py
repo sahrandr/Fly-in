@@ -1,17 +1,29 @@
+"""Parsing and validation of Fly-in map files."""
+
 from typing import Optional
 
 
 class MapParsingError(Exception):
-    """Erreur de syntaxe ou de validation dans un fichier de carte."""
+    """Syntax or validation error in a map file."""
+
     pass
 
 
 class Zone:
-    """Une zone du reseau."""
+    """A zone of the network."""
 
     def __init__(
         self, name: str, x: int, y: int, metadata: dict[str, str]
     ) -> None:
+        """Create a zone from its coordinates and metadata.
+
+        Args:
+            name: Unique name of the zone.
+            x: X coordinate of the zone.
+            y: Y coordinate of the zone.
+            metadata: Optional ``color``, ``zone`` and ``max_drones``
+                values, as raw strings.
+        """
         self.name = name
         self.x = x
         self.y = y
@@ -20,6 +32,7 @@ class Zone:
         self.max_drones = int(metadata.get("max_drones", 1))
 
     def __repr__(self) -> str:
+        """Return a short readable description of the zone."""
         return (
             f"Zone({self.name}, x={self.x}, y={self.y}, "
             f"type={self.zone_type})"
@@ -27,16 +40,25 @@ class Zone:
 
 
 class Connection:
-    """Une connexion bidirectionnelle entre deux zones."""
+    """A bidirectional connection between two zones."""
 
     def __init__(
         self, zone_a: str, zone_b: str, metadata: dict[str, str]
     ) -> None:
+        """Create a connection between two zones.
+
+        Args:
+            zone_a: Name of the first zone.
+            zone_b: Name of the second zone.
+            metadata: Optional ``max_link_capacity`` value, as a raw
+                string.
+        """
         self.zone_a = zone_a
         self.zone_b = zone_b
         self.max_link_capacity = int(metadata.get("max_link_capacity", 1))
 
     def __repr__(self) -> str:
+        """Return a short readable description of the connection."""
         return (
             f"Connection({self.zone_a}-{self.zone_b}, "
             f"capacity={self.max_link_capacity})"
@@ -44,9 +66,10 @@ class Connection:
 
 
 class ParsedMap:
-    """Resultat du parsing."""
+    """Result of the parsing."""
 
     def __init__(self) -> None:
+        """Create an empty parsed map."""
         self.nb_drones: int = 0
         self.start_zone: Optional[str] = None
         self.end_zone: Optional[str] = None
@@ -54,6 +77,7 @@ class ParsedMap:
         self.connections: list[Connection] = []
 
     def __repr__(self) -> str:
+        """Return a short summary of the parsed map."""
         return (
             f"ParsedMap(nb_drones={self.nb_drones}, "
             f"start={self.start_zone}, end={self.end_zone}, "
@@ -63,292 +87,390 @@ class ParsedMap:
 
 
 class MapParser:
-    """Lit un fichier de carte et le valide ligne par ligne."""
+    """Read a map file and validate it line by line."""
 
     VALID_ZONE_TYPES = {"normal", "blocked", "restricted", "priority"}
     ZONE_KEYS = {"zone", "color", "max_drones"}
     CONNECTION_KEYS = {"max_link_capacity"}
 
     def __init__(self, filepath: str) -> None:
-        self.filepath = filepath
-        self._connexions_vues: set[frozenset[str]] = set()
+        """Create a parser for the given map file.
 
-    # ------------------------------------------------------------------
-    #  Validation
-    # ------------------------------------------------------------------
-    def _valider_zone_type(
-        self, metadata: dict[str, str], numero_ligne: int
+        Args:
+            filepath: Path of the map file to parse.
+        """
+        self.filepath = filepath
+        self._seen_connections: set[frozenset[str]] = set()
+
+    def _validate_zone_type(
+        self, metadata: dict[str, str], line_number: int
     ) -> None:
-        """Le type de zone doit etre l'un des 4 types connus."""
+        """Check that the zone type is one of the 4 known types.
+
+        Args:
+            metadata: Zone metadata, possibly containing ``zone``.
+            line_number: Line number, used in error messages.
+
+        Raises:
+            MapParsingError: If the zone type is unknown.
+        """
         zone_type = metadata.get("zone", "normal")
         if zone_type not in self.VALID_ZONE_TYPES:
             raise MapParsingError(
-                f"Line {numero_ligne}: invalid zone type '{zone_type}'. "
+                f"Line {line_number}: invalid zone type '{zone_type}'. "
                 f"Must be one of: {sorted(self.VALID_ZONE_TYPES)}"
             )
 
-    def _valider_capacite(
-        self, valeur_str: str, nom_champ: str, numero_ligne: int
+    def _validate_capacity(
+        self, value_str: str, field_name: str, line_number: int
     ) -> int:
-        """Entier strictement positif, sinon MapParsingError."""
-        if not (valeur_str.isascii() and valeur_str.isdigit()):
+        """Convert a string to a strictly positive integer.
+
+        Args:
+            value_str: Raw value to convert.
+            field_name: Name of the field, used in error messages.
+            line_number: Line number, used in error messages.
+
+        Returns:
+            The value as an integer.
+
+        Raises:
+            MapParsingError: If the value is not a strictly positive
+                integer.
+        """
+        if not (value_str.isascii() and value_str.isdigit()):
             raise MapParsingError(
-                f"Line {numero_ligne}: {nom_champ} must be a positive "
-                f"integer, got '{valeur_str}'"
+                f"Line {line_number}: {field_name} must be a positive "
+                f"integer, got '{value_str}'"
             )
-        valeur = int(valeur_str)
-        if valeur <= 0:
+        value = int(value_str)
+        if value <= 0:
             raise MapParsingError(
-                f"Line {numero_ligne}: {nom_champ} must be positive, "
-                f"got {valeur}"
+                f"Line {line_number}: {field_name} must be positive, "
+                f"got {value}"
             )
-        return valeur
+        return value
 
     @staticmethod
-    def _valider_nom(nom: str, numero_ligne: int) -> None:
-        """Un nom de zone ne contient ni tiret ni espace."""
-        if nom == "" or "-" in nom or " " in nom:
+    def _validate_name(name: str, line_number: int) -> None:
+        """Check that a zone name has no dash and no space.
+
+        Args:
+            name: Zone name to check.
+            line_number: Line number, used in error messages.
+
+        Raises:
+            MapParsingError: If the name is empty or contains a dash
+                or a space.
+        """
+        if name == "" or "-" in name or " " in name:
             raise MapParsingError(
-                f"Line {numero_ligne}: invalid zone name '{nom}' "
+                f"Line {line_number}: invalid zone name '{name}' "
                 f"(dashes and spaces are forbidden)"
             )
 
     @staticmethod
-    def _split_metadata(reste: str, numero_ligne: int) -> tuple[str, str]:
-        """Separe 'partie principale' et 'contenu des crochets'.
+    def _split_metadata(rest: str, line_number: int) -> tuple[str, str]:
+        """Split the main part from the content of the brackets.
 
-        Retourne (principal, "") s'il n'y a pas de metadata.
+        Args:
+            rest: Text following the ``prefix:`` of a line.
+            line_number: Line number, used in error messages.
+
+        Returns:
+            A tuple ``(main_part, inside)``, where ``inside`` is an
+            empty string if there is no metadata.
+
+        Raises:
+            MapParsingError: If the brackets are malformed.
         """
-        if "[" not in reste and "]" not in reste:
-            return reste.strip(), ""
-        if reste.count("[") != 1 or reste.count("]") != 1:
+        if "[" not in rest and "]" not in rest:
+            return rest.strip(), ""
+        if rest.count("[") != 1 or rest.count("]") != 1:
             raise MapParsingError(
-                f"Line {numero_ligne}: malformed metadata brackets"
+                f"Line {line_number}: malformed metadata brackets"
             )
-        debut = reste.index("[")
-        fin = reste.index("]")
-        if fin < debut or reste[fin + 1:].strip() != "":
+        start = rest.index("[")
+        end = rest.index("]")
+        if end < start or rest[end + 1:].strip() != "":
             raise MapParsingError(
-                f"Line {numero_ligne}: malformed metadata brackets"
+                f"Line {line_number}: malformed metadata brackets"
             )
-        return reste[:debut].strip(), reste[debut + 1:fin]
+        return rest[:start].strip(), rest[start + 1:end]
 
     def _extract_metadata(
         self,
-        interieur: str,
-        cles_valides: set[str],
-        numero_ligne: int,
+        inside: str,
+        valid_keys: set[str],
+        line_number: int,
     ) -> dict[str, str]:
-        """Transforme 'a=1 b=2' en dict, en validant la syntaxe."""
+        """Turn ``'a=1 b=2'`` into a dict, validating the syntax.
+
+        Args:
+            inside: Content found between the brackets.
+            valid_keys: Keys allowed for this kind of line.
+            line_number: Line number, used in error messages.
+
+        Returns:
+            The metadata as a ``{key: value}`` dict.
+
+        Raises:
+            MapParsingError: If a pair is malformed, has an unknown
+                key, or repeats a key.
+        """
         metadata: dict[str, str] = {}
-        for paire in interieur.split():
-            if paire.count("=") != 1:
+        for pair in inside.split():
+            if pair.count("=") != 1:
                 raise MapParsingError(
-                    f"Line {numero_ligne}: invalid metadata '{paire}' "
+                    f"Line {line_number}: invalid metadata '{pair}' "
                     f"(expected key=value)"
                 )
-            cle, valeur = paire.split("=")
-            if cle == "" or valeur == "":
+            key, value = pair.split("=")
+            if key == "" or value == "":
                 raise MapParsingError(
-                    f"Line {numero_ligne}: invalid metadata '{paire}' "
+                    f"Line {line_number}: invalid metadata '{pair}' "
                     f"(empty key or value)"
                 )
-            if cle not in cles_valides:
+            if key not in valid_keys:
                 raise MapParsingError(
-                    f"Line {numero_ligne}: unknown metadata key '{cle}'. "
-                    f"Allowed: {sorted(cles_valides)}"
+                    f"Line {line_number}: unknown metadata key '{key}'. "
+                    f"Allowed: {sorted(valid_keys)}"
                 )
-            if cle in metadata:
+            if key in metadata:
                 raise MapParsingError(
-                    f"Line {numero_ligne}: duplicate metadata key '{cle}'"
+                    f"Line {line_number}: duplicate metadata key '{key}'"
                 )
-            metadata[cle] = valeur
+            metadata[key] = value
         return metadata
 
     def _extract_zone(
-        self, ligne: str, numero_ligne: int
+        self, line: str, line_number: int
     ) -> tuple[str, int, int, dict[str, str]]:
-        """Parse '<prefix>: <name> <x> <y> [metadata]'."""
-        reste = ligne.split(":", 1)[1]
-        principal, interieur = self._split_metadata(reste, numero_ligne)
-        morceaux = principal.split()
-        if len(morceaux) != 3:
+        """Parse ``'<prefix>: <name> <x> <y> [metadata]'``.
+
+        Args:
+            line: The full line to parse.
+            line_number: Line number, used in error messages.
+
+        Returns:
+            A tuple ``(name, x, y, metadata)``.
+
+        Raises:
+            MapParsingError: If the line is malformed.
+        """
+        rest = line.split(":", 1)[1]
+        main_part, inside = self._split_metadata(rest, line_number)
+        parts = main_part.split()
+        if len(parts) != 3:
             raise MapParsingError(
-                f"Line {numero_ligne}: expected '<name> <x> <y>', "
-                f"got '{principal}'"
+                f"Line {line_number}: expected '<name> <x> <y>', "
+                f"got '{main_part}'"
             )
-        nom, x_str, y_str = morceaux
-        self._valider_nom(nom, numero_ligne)
+        name, x_str, y_str = parts
+        self._validate_name(name, line_number)
         try:
             x, y = int(x_str), int(y_str)
         except ValueError:
             raise MapParsingError(
-                f"Line {numero_ligne}: coordinates must be integers, "
+                f"Line {line_number}: coordinates must be integers, "
                 f"got '{x_str}' '{y_str}'"
             ) from None
         metadata = self._extract_metadata(
-            interieur, self.ZONE_KEYS, numero_ligne
+            inside, self.ZONE_KEYS, line_number
         )
-        return nom, x, y, metadata
+        return name, x, y, metadata
 
     def _extract_connection(
-        self, ligne: str, numero_ligne: int
+        self, line: str, line_number: int
     ) -> tuple[str, str, dict[str, str]]:
-        """Parse 'connection: <a>-<b> [metadata]'."""
-        reste = ligne.split(":", 1)[1]
-        principal, interieur = self._split_metadata(reste, numero_ligne)
-        parties = principal.split("-")
-        if len(parties) != 2 or parties[0] == "" or parties[1] == "":
+        """Parse ``'connection: <a>-<b> [metadata]'``.
+
+        Args:
+            line: The full line to parse.
+            line_number: Line number, used in error messages.
+
+        Returns:
+            A tuple ``(zone_a, zone_b, metadata)``.
+
+        Raises:
+            MapParsingError: If the line is malformed.
+        """
+        rest = line.split(":", 1)[1]
+        main_part, inside = self._split_metadata(rest, line_number)
+        parts = main_part.split("-")
+        if len(parts) != 2 or parts[0] == "" or parts[1] == "":
             raise MapParsingError(
-                f"Line {numero_ligne}: expected '<zone1>-<zone2>', "
-                f"got '{principal}'"
+                f"Line {line_number}: expected '<zone1>-<zone2>', "
+                f"got '{main_part}'"
             )
         metadata = self._extract_metadata(
-            interieur, self.CONNECTION_KEYS, numero_ligne
+            inside, self.CONNECTION_KEYS, line_number
         )
-        return parties[0], parties[1], metadata
+        return parts[0], parts[1], metadata
 
     def _add_zone(
         self,
-        ligne: str,
+        line: str,
         result: ParsedMap,
-        numero_ligne: int,
-        ignorer_capacite: bool,
+        line_number: int,
+        ignore_capacity: bool,
     ) -> str:
-        """Ajoute une zone (hub, start_hub ou end_hub). Retourne son nom.
+        """Add a zone (hub, start_hub or end_hub) to the result.
 
-        Sur start/end, max_drones est ignore (sujet, VII.4).
+        On start and end zones, ``max_drones`` is ignored (subject,
+        VII.4).
+
+        Args:
+            line: The full line to parse.
+            result: The parsed map being built.
+            line_number: Line number, used in error messages.
+            ignore_capacity: Whether to discard ``max_drones``.
+
+        Returns:
+            The name of the added zone.
+
+        Raises:
+            MapParsingError: If the line is invalid or the zone name
+                is already used.
         """
-        nom, x, y, metadata = self._extract_zone(ligne, numero_ligne)
-        if nom in result.zones:
+        name, x, y, metadata = self._extract_zone(line, line_number)
+        if name in result.zones:
             raise MapParsingError(
-                f"Line {numero_ligne}: duplicate zone name '{nom}'"
+                f"Line {line_number}: duplicate zone name '{name}'"
             )
-        self._valider_zone_type(metadata, numero_ligne)
-        if ignorer_capacite:
+        self._validate_zone_type(metadata, line_number)
+        if ignore_capacity:
             metadata.pop("max_drones", None)
         elif "max_drones" in metadata:
-            self._valider_capacite(
-                metadata["max_drones"], "max_drones", numero_ligne
+            self._validate_capacity(
+                metadata["max_drones"], "max_drones", line_number
             )
-        result.zones[nom] = Zone(nom, x, y, metadata)
-        return nom
+        result.zones[name] = Zone(name, x, y, metadata)
+        return name
 
     def _parse_line(
-        self, ligne: str, result: ParsedMap, numero_ligne: int
+        self, line: str, result: ParsedMap, line_number: int
     ) -> None:
-        """Interprete une ligne non vide et non commentee."""
-        if ligne.startswith("nb_drones:"):
+        """Interpret a line that is neither empty nor a comment.
+
+        Args:
+            line: The stripped line to interpret.
+            result: The parsed map being built.
+            line_number: Line number, used in error messages.
+
+        Raises:
+            MapParsingError: If the line is invalid, duplicated, or
+                references an undefined zone.
+        """
+        if line.startswith("nb_drones:"):
             if result.nb_drones != 0:
                 raise MapParsingError(
-                    f"Line {numero_ligne}: duplicate nb_drones"
+                    f"Line {line_number}: duplicate nb_drones"
                 )
-            reste = ligne.split(":", 1)[1].strip()
-            result.nb_drones = self._valider_capacite(
-                reste, "nb_drones", numero_ligne
+            rest = line.split(":", 1)[1].strip()
+            result.nb_drones = self._validate_capacity(
+                rest, "nb_drones", line_number
             )
 
-        elif ligne.startswith("start_hub:"):
+        elif line.startswith("start_hub:"):
             if result.start_zone is not None:
                 raise MapParsingError(
-                    f"Line {numero_ligne}: duplicate start_hub "
+                    f"Line {line_number}: duplicate start_hub "
                     f"(already defined as '{result.start_zone}')"
                 )
             result.start_zone = self._add_zone(
-                ligne, result, numero_ligne, True
+                line, result, line_number, True
             )
 
-        elif ligne.startswith("end_hub:"):
+        elif line.startswith("end_hub:"):
             if result.end_zone is not None:
                 raise MapParsingError(
-                    f"Line {numero_ligne}: duplicate end_hub "
+                    f"Line {line_number}: duplicate end_hub "
                     f"(already defined as '{result.end_zone}')"
                 )
             result.end_zone = self._add_zone(
-                ligne, result, numero_ligne, True
+                line, result, line_number, True
             )
 
-        elif ligne.startswith("hub:"):
-            self._add_zone(ligne, result, numero_ligne, False)
+        elif line.startswith("hub:"):
+            self._add_zone(line, result, line_number, False)
 
-        elif ligne.startswith("connection:"):
+        elif line.startswith("connection:"):
             zone_a, zone_b, metadata = self._extract_connection(
-                ligne, numero_ligne
+                line, line_number
             )
-            for nom in (zone_a, zone_b):
-                if nom not in result.zones:
+            for name in (zone_a, zone_b):
+                if name not in result.zones:
                     raise MapParsingError(
-                        f"Line {numero_ligne}: connection references "
-                        f"undefined zone '{nom}'"
+                        f"Line {line_number}: connection references "
+                        f"undefined zone '{name}'"
                     )
             if zone_a == zone_b:
                 raise MapParsingError(
-                    f"Line {numero_ligne}: connection from '{zone_a}' "
+                    f"Line {line_number}: connection from '{zone_a}' "
                     f"to itself"
                 )
-            cle = frozenset((zone_a, zone_b))
-            if cle in self._connexions_vues:
+            key = frozenset((zone_a, zone_b))
+            if key in self._seen_connections:
                 raise MapParsingError(
-                    f"Line {numero_ligne}: duplicate connection between "
+                    f"Line {line_number}: duplicate connection between "
                     f"'{zone_a}' and '{zone_b}'"
                 )
             if "max_link_capacity" in metadata:
-                self._valider_capacite(
+                self._validate_capacity(
                     metadata["max_link_capacity"],
                     "max_link_capacity",
-                    numero_ligne,
+                    line_number,
                 )
-            self._connexions_vues.add(cle)
+            self._seen_connections.add(key)
             result.connections.append(Connection(zone_a, zone_b, metadata))
 
         else:
             raise MapParsingError(
-                f"Line {numero_ligne}: unrecognized line format: "
-                f"'{ligne}'"
+                f"Line {line_number}: unrecognized line format: "
+                f"'{line}'"
             )
 
     def parse(self) -> ParsedMap:
-        """Parse le fichier.
+        """Parse the map file.
+
+        Returns:
+            The validated ``ParsedMap``.
 
         Raises:
-            MapParsingError: fichier illisible ou carte invalide.
+            MapParsingError: If the file is unreadable or the map is
+                invalid.
         """
         result = ParsedMap()
-        self._connexions_vues = set()
-        premiere_ligne_vue = False
+        self._seen_connections = set()
+        first_line_seen = False
 
         try:
             with open(self.filepath, "r", encoding="utf-8") as f:
-                for numero_ligne, brut in enumerate(f, start=1):
-                    ligne = brut.strip()
+                for line_number, raw in enumerate(f, start=1):
+                    line = raw.strip()
 
-                    if ligne == "" or ligne.startswith("#"):
+                    if line == "" or line.startswith("#"):
                         continue
 
-                    # la 1re ligne utile doit etre nb_drones
-                    if not premiere_ligne_vue:
-                        premiere_ligne_vue = True
-                        if not ligne.startswith("nb_drones:"):
+                    if not first_line_seen:
+                        first_line_seen = True
+                        if not line.startswith("nb_drones:"):
                             raise MapParsingError(
-                                f"Line {numero_ligne}: the first line "
+                                f"Line {line_number}: the first line "
                                 f"must define nb_drones"
                             )
 
-                    self._parse_line(ligne, result, numero_ligne)
+                    self._parse_line(line, result, line_number)
 
         except (OSError, UnicodeDecodeError) as err:
             raise MapParsingError(
                 f"Cannot read '{self.filepath}': {err}"
             ) from err
 
-        # --- VÉRIFICATIONS FINALES ---
+        if not first_line_seen:
+            raise MapParsingError("The file is completely empty.")
 
-        # 1. Si premiere_ligne_vue est toujours False, c'est qu'il n'y avait
-        #    rien à lire
-        if not premiere_ligne_vue:
-            raise MapParsingError("Le fichier est completement vide.")
-
-        # 2. Vérification des données requises
         if result.nb_drones == 0:
             raise MapParsingError("Map must define nb_drones")
 
@@ -357,15 +479,15 @@ class MapParser:
                 "Map must have exactly one start_hub and one end_hub"
             )
 
-        coordones_vue: set[tuple[int, int]] = set()
-        for nom_zone, zone in result.zones.items():
+        seen_coords: set[tuple[int, int]] = set()
+        for zone_name, zone in result.zones.items():
             coord = (zone.x, zone.y)
-            if coord in coordones_vue:
+            if coord in seen_coords:
                 raise MapParsingError(
-                    f"Invalid map: Les zones ne peuvent pas se "
-                    f"superposer. Coordonnées {coord} en double "
-                    f"trouvées sur la zone '{nom_zone}'."
+                    f"Invalid map: zones cannot overlap. "
+                    f"Duplicate coordinates {coord} found on zone "
+                    f"'{zone_name}'."
                 )
-            coordones_vue.add(coord)
+            seen_coords.add(coord)
 
         return result
