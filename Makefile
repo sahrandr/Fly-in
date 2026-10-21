@@ -1,9 +1,14 @@
-PYTHON ?= python3
+PYTHON ?= .env/bin/python3
 MAIN   := main.py
 
 .PHONY: install run debug clean lint lint-strict
 
-install:
+all: install run
+
+venv : 
+	python3 -m venv .env
+
+install: venv
 	$(PYTHON) -m pip install raylib flake8 mypy
 
 run:

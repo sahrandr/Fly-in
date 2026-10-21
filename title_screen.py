@@ -14,12 +14,10 @@ import math
 from typing import Dict, Optional
 
 from pyray import (
-    ConfigFlags,
     MouseButton,
     Vector2,
     begin_drawing,
     clear_background,
-    close_window,
     draw_line,
     draw_line_ex,
     draw_text,
@@ -29,10 +27,7 @@ from pyray import (
     get_screen_height,
     get_screen_width,
     get_time,
-    init_window,
     is_mouse_button_pressed,
-    set_config_flags,
-    set_target_fps,
     window_should_close,
 )
 
@@ -162,7 +157,7 @@ def run_title_screen(
         for btn in buttons.values():
             btn.draw()
 
-        foot = "15 drones  |  26 tours  |  carte: ultimate_challenge"
+        foot = "15 drones | 26 circuits | map: ultimate_challenge"
         draw_text(
             foot,
             btn_x,
@@ -174,24 +169,3 @@ def run_title_screen(
         end_drawing()
 
     return None
-
-
-def main() -> None:
-    """Initialize the window, run the title screen, then clean up.
-
-    The window is always closed via ``close_window`` in a ``finally``
-    block, even if ``run_title_screen`` raises, so the graphics
-    resources are never leaked.
-    """
-    set_config_flags(ConfigFlags.FLAG_BORDERLESS_WINDOWED_MODE)
-    init_window(0, 0, "Fly-in")
-    try:
-        set_target_fps(60)
-        choice = run_title_screen(has_save=False)
-        print(f"Choix: {choice}")
-    finally:
-        close_window()
-
-
-if __name__ == "__main__":
-    main()

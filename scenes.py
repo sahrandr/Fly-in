@@ -101,7 +101,7 @@ class TitleScene(Scene):
         self.buttons: Dict[str, Button] = {
             "new": Button("NEW GAME", self.btn_x, buttons_y, btn_w, btn_h),
             "continue": Button(
-                "CONTINUER",
+                "CONTINUE",
                 self.btn_x,
                 buttons_y + 1 * (btn_h + gap),
                 btn_w,
@@ -280,10 +280,10 @@ class MapSelectScene(Scene):
     def draw(self) -> None:
         """Render category headers, map buttons, and empty-state text."""
         Renderer.draw_text_spaced(
-            "CHOISIS UNE CARTE", self.start_x, 70, 30, Colors.TEXT, 4
+            "CHOOSE THE MAP", self.start_x, 70, 30, Colors.TEXT, 4
         )
         Renderer.draw_text_spaced(
-            "clique une carte pour lancer la simulation",
+            "click a map to start the simulation",
             self.start_x + 2,
             108,
             11,
@@ -300,7 +300,7 @@ class MapSelectScene(Scene):
 
         if not self.entries:
             draw_text(
-                f"aucune carte trouvee dans '{self.maps_root}/'",
+                f"no maps found '{self.maps_root}/'",
                 self.start_x,
                 210,
                 14,
@@ -334,6 +334,7 @@ class SimulationScene(Scene):
             self.by_turn: Dict[int, List[Tuple[Any, Any]]] = (
                 self.simulator.run()
             )
+            self.simulator.display(self.by_turn)
         except (MapParsingError, ValueError) as err:
             print(f"Error: {err}", file=sys.stderr)
             sys.exit(1)
@@ -690,7 +691,7 @@ class SimulationScene(Scene):
 
     def _draw_ui(self) -> None:
         """Draw the turn counter, progress bar, and footer hints."""
-        label = f"TOUR {self.sim_turn:02d} / {self.max_turns}"
+        label = f"TURN {self.sim_turn:02d} / {self.max_turns}"
         w = Renderer.measure_spaced(label, 18, 3)
         draw_rectangle(24, 26, 3, 24, Colors.PATH)
         Renderer.draw_text_spaced(label, 40, 27, 18, Colors.TEXT, 3)
@@ -706,8 +707,8 @@ class SimulationScene(Scene):
 
         draw_text(f"{len(self.drone_ids)} drones", 40, 74, 11, Colors.MUTED)
         hint = (
-            "anneau = restricted (2 tours)   point = priority   "
-            "clic droit = retour menu"
+            "ring = restricted (2 turns)   dot = priority   "
+            "right click = back to menu"
         )
         draw_text(hint, 40, self.screen_h - 30, 11, Colors.MUTED)
 

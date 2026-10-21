@@ -2,11 +2,10 @@
 
 import heapq
 import itertools
-import sys
 from collections import deque
 from typing import Optional
 
-from parser import Connection, MapParser, ParsedMap, Zone
+from parser import Connection, ParsedMap, Zone
 
 State = tuple[int, str]
 
@@ -561,28 +560,10 @@ class Simulator:
             by_turn: Moves grouped by turn, as returned by ``run``.
         """
         for turn in range(1, max(by_turn, default=0) + 1):
+            moves = by_turn.get(turn, [])
             parts = [
-                f"{drone_id}-{dest}"
-                for drone_id, dest in by_turn.get(turn, [])
+                f"{drone_id}-{dest}" for drone_id, dest in moves
             ]
-            print(" ".join(parts))
+            line = " ".join(parts)
 
-
-def main() -> None:
-    """Parse the map given on the command line and run the simulation."""
-    if len(sys.argv) < 2:
-        print("Usage: python algo.py <map_filepath>", file=sys.stderr)
-        sys.exit(1)
-    filepath = sys.argv[1]
-
-    parser = MapParser(filepath)
-    parsed_map = parser.parse()
-
-    simulator = Simulator(parsed_map)
-    result_by_turn = simulator.run()
-
-    simulator.display(result_by_turn)
-
-
-if __name__ == "__main__":
-    main()
+            print(f"{line}")

@@ -4,26 +4,16 @@ import os
 
 from pyray import (
     Color,
-    ConfigFlags,
     MouseButton,
-    begin_drawing,
-    clear_background,
-    close_window,
-    draw_rectangle,
-    draw_text,
-    end_drawing,
     get_frame_time,
     get_mouse_position,
     get_screen_height,
     get_screen_width,
-    init_window,
     is_mouse_button_pressed,
-    set_config_flags,
-    set_target_fps,
     window_should_close,
 )
 
-from ui import Button, Colors, Renderer
+from ui import Button, Colors
 
 
 class MapManager:
@@ -158,37 +148,6 @@ class MapSelectScene:
                 return path
         return None
 
-    def draw(self) -> None:
-        """Render the title, the category headers and the buttons."""
-        begin_drawing()
-        clear_background(Colors.BG)
-
-        Renderer.draw_grid(self.screen_w, self.screen_h)
-
-        title = "CHOISIS UNE CARTE"
-        Renderer.draw_text_spaced(title, self.start_x, 70, 30, Colors.TEXT, 4)
-        sub = "clique une carte pour lancer la simulation"
-        Renderer.draw_text_spaced(
-            sub, self.start_x + 2, 108, 11,
-            Renderer.with_alpha(Colors.MUTED, 220), 3,
-        )
-
-        for text, hx, hy, color in self.headers:
-            draw_rectangle(int(hx), int(hy) - 2, 3, 16, color)
-            Renderer.draw_text_spaced(text, hx + 10, hy - 2, 13, color, 2)
-
-        for btn, _path in self.entries:
-            btn.draw()
-
-        if not self.entries:
-            msg = f"aucune carte trouvée dans '{self.maps_root}/'"
-            draw_text(
-                msg, self.start_x, 210, 14,
-                Renderer.with_alpha(Colors.MUTED, 220),
-            )
-
-        end_drawing()
-
     def run(self) -> str | None:
         """Run the selection loop until a map is chosen.
 
@@ -201,16 +160,4 @@ class MapSelectScene:
             chosen_path = self.update(dt)
             if chosen_path:
                 return chosen_path
-            self.draw()
         return None
-
-
-if __name__ == "__main__":
-    set_config_flags(ConfigFlags.FLAG_BORDERLESS_WINDOWED_MODE)
-    init_window(0, 0, "Fly-in")
-    set_target_fps(60)
-
-    scene = MapSelectScene()
-    choice = scene.run()
-    print(f"Carte choisie: {choice}")
-    close_window()

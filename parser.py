@@ -1,6 +1,7 @@
 """Parsing and validation of Fly-in map files."""
 
 from typing import Optional
+import re
 
 
 class MapParsingError(Exception):
@@ -452,6 +453,9 @@ class MapParser:
 
                     if line == "" or line.startswith("#"):
                         continue
+
+                    line = re.sub(r'[\t]+', ' ', line)
+                    line = re.sub(r'[ \t]*:[ \t]*', ':', line)
 
                     if not first_line_seen:
                         first_line_seen = True

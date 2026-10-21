@@ -19,7 +19,7 @@ can be reasoned about on its own:
   one drone at a time, aware of every reservation made by drones planned
   before it, so later drones route around already-occupied zones/links
   instead of colliding with them.
-- **`main.py`** (with `title_screen.py` and `map_select.py`) — a raylib
+- **`main.py`** (with `title_screen.py`,`map_select.py`,`ui.py` and `scenes.py`) — a raylib
   2D interface: a title screen, a map browser that scans the `maps/`
   folder, and the live simulation view.
 
@@ -51,8 +51,6 @@ This opens a single window that walks through three screens in order:
 
 Controls during the simulation:
 
-- `F11` — toggle borderless fullscreen (the layout re-centers itself on
-  resize, it does not just stretch a fixed-size render).
 - Hovering a zone shows its name even if it isn't on any drone's path.
 
 The terminal also prints the simulation in the exact turn-by-turn format
@@ -73,7 +71,7 @@ At every state, two actions are considered:
 
 - **wait** one turn in place, only if the zone still has room at the
   next turn. This is how the algorithm expresses "strategic waiting
-  when movement is not possible" (subject VII.1).
+  when movement is not possible".
 - **advance** to a neighboring zone, only if the destination zone has
   room at the arrival turn and the connection has room on every transit
   turn. A move into a `restricted` zone costs 2 turns and reserves the
@@ -108,7 +106,7 @@ The search stops when the end zone is popped, or fails with a
 
 An unweighted BFS from the end zone gives each zone its hop distance
 to the goal. It is computed once per target and cached in `Graph`.
-It is **not** added to the cost (this is not A*): it only orders states
+It is **not** added to the cost: it only orders states
 that already share the same turn and the same priority penalty,
 preferring the one closer to the goal. Unreachable zones get a
 distance worse than any reachable one, instead of raising a `KeyError`.
@@ -122,7 +120,7 @@ guaranteed to be optimal.
 ### Correctness details worth flagging
 
 - **Start and end zones have no capacity limit**, per the subject
-  (VII.4): "all drones may start in the start zone, and any number of
+  : "all drones may start in the start zone, and any number of
   drones may be delivered to the end zone." The parser's own `max_drones`
   default (`1`) would otherwise apply to these two zones as well, so the
   pathfinder explicitly overrides their capacity to unlimited rather
